@@ -78,3 +78,11 @@
 統計は評価値より優先される。
 
 MVPでは「便利な棋譜管理ツール」を目指す。
+
+## Development Notes
+
+VS Code上で Claude Code を利用する場合、
+ELECTRON_RUN_AS_NODE=1 が引き継がれることがある。
+
+Electron起動時に問題が発生した場合は、
+まずこの環境変数を確認すること。
