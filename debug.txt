@@ -1,0 +1,1 @@
+type:string val:c:\Dev\shogi-study\node_modules\electron\dist\electron.exe
