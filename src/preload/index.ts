@@ -1,4 +1,5 @@
-import { contextBridge } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 
-// IPC APIはここに追加していく
-contextBridge.exposeInMainWorld('api', {})
+contextBridge.exposeInMainWorld('api', {
+  selectKifuFile: (): Promise<string | null> => ipcRenderer.invoke('select-kifu-file')
+})

@@ -1,4 +1,15 @@
+import { useState } from 'react'
+
+declare global {
+  interface Window {
+    api: {
+      selectKifuFile: () => Promise<string | null>
+    }
+  }
+}
+
 function App(): JSX.Element {
+  const [selectedPath, setSelectedPath] = useState<string | null>(null)
   return (
     <div
       style={{
@@ -13,7 +24,10 @@ function App(): JSX.Element {
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '24px' }}>
         <h1 style={{ margin: 0 }}>将棋研究アプリ</h1>
         <button
-          onClick={() => console.log('未実装')}
+          onClick={async () => {
+            const path = await window.api.selectKifuFile()
+            setSelectedPath(path)
+          }}
           style={{
             padding: '10px 32px',
             fontSize: '16px',
@@ -22,6 +36,11 @@ function App(): JSX.Element {
         >
           棋譜を選択
         </button>
+        {selectedPath && (
+          <p style={{ fontSize: '14px', color: '#555', wordBreak: 'break-all', maxWidth: '600px' }}>
+            {selectedPath}
+          </p>
+        )}
       </div>
     </div>
   )

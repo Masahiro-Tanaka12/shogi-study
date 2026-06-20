@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { join } from 'path'
 
 function createWindow(): void {
@@ -18,6 +18,14 @@ function createWindow(): void {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 }
+
+ipcMain.handle('select-kifu-file', async () => {
+  const { filePaths } = await dialog.showOpenDialog({
+    properties: ['openFile'],
+    filters: [{ name: 'KIF ファイル', extensions: ['kif'] }]
+  })
+  return filePaths[0] ?? null
+})
 
 app.whenReady().then(() => {
   createWindow()
