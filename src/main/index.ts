@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
 import { join } from 'path'
 
 function createWindow(): void {
@@ -28,6 +28,18 @@ ipcMain.handle('select-kifu-file', async () => {
 })
 
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate([
+      {
+        label: 'ファイル',
+        submenu: [
+          { label: '棋譜を開く', enabled: false },
+          { type: 'separator' },
+          { label: '終了', role: 'quit' }
+        ]
+      }
+    ])
+  )
   createWindow()
 
   app.on('activate', () => {
