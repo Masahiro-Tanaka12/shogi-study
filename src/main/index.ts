@@ -1,5 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
 import { join, basename } from 'path'
+import { readFile } from 'fs/promises'
+import { parseKif } from '../shared/kifu'
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -45,6 +47,13 @@ app.whenReady().then(() => {
             if (filePaths.length === 0) return
             const files = filePaths.map(p => ({ fileName: basename(p), path: p, tags: [] }))
             win.webContents.send('kifu-file-opened', files)
+
+            for (const p of filePaths) {
+              const content = await readFile(p, 'utf-8')
+              const moves = parseKif(content)
+              console.log(`[kifu] ${basename(p)}: ${moves.length} 手`)
+              console.log(moves)
+            }
           }
         },
           { type: 'separator' },
