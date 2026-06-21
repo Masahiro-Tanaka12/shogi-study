@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import type { KifuFile } from '../../shared/types'
+import boardUrl from './assets/shogi/light_878x960.png'
 
 interface MoveCount { move: string; count: number }
 
@@ -118,8 +119,28 @@ function PasteKifModal({ onClose, onSaved }: { onClose: () => void; onSaved: (fi
   )
 }
 
-const COLS = ['9', '8', '7', '6', '5', '4', '3', '2', '1']
-const ROWS = ['一', '二', '三', '四', '五', '六', '七', '八', '九']
+const _pieceModules = import.meta.glob('./assets/shogi/*.png', { eager: true }) as Record<string, { default: string }>
+const PIECE_URLS: Record<string, string> = Object.fromEntries(
+  Object.entries(_pieceModules).map(([path, mod]) => [path.split('/').pop()!.replace('.png', ''), mod.default])
+)
+
+function getPieceUrl(piece: string, sente: boolean, promoted: boolean): string {
+  const side = sente ? 'black' : 'white'
+  let name: string
+  if (promoted) {
+    const promMap: Record<string, string> = {
+      p: 'prom_pawn', l: 'prom_lance', n: 'prom_knight', s: 'prom_silver', b: 'horse', r: 'dragon',
+    }
+    name = promMap[piece] ?? piece
+  } else {
+    const baseMap: Record<string, string> = {
+      p: 'pawn', l: 'lance', n: 'knight', s: 'silver', g: 'gold', b: 'bishop', r: 'rook',
+      k: sente ? 'king2' : 'king',
+    }
+    name = baseMap[piece] ?? piece
+  }
+  return PIECE_URLS[`${side}_${name}`] ?? ''
+}
 
 interface Cell { piece: string; sente: boolean; promoted: boolean }
 
@@ -158,35 +179,44 @@ function parseSfenHand(handPart: string): { sente: Record<string, number>; gote:
   return { sente, gote }
 }
 
-const PIECE_KANJI: Record<string, string> = {
-  p: '歩', l: '香', n: '桂', s: '銀', g: '金', b: '角', r: '飛', k: '王'
-}
-const PROMOTED_KANJI: Record<string, string> = {
-  p: 'と', l: '杏', n: '圭', s: '全', b: '馬', r: '竜'
-}
 const HAND_ORDER = ['r', 'b', 'g', 's', 'n', 'l', 'p']
-
-function pieceText(cell: Cell): string {
-  if (cell.promoted && PROMOTED_KANJI[cell.piece]) return PROMOTED_KANJI[cell.piece]
-  return PIECE_KANJI[cell.piece] ?? cell.piece
-}
 
 function HandArea({ hand, isSente }: { hand: Record<string, number>; isSente: boolean }): JSX.Element {
   const entries = HAND_ORDER.filter(p => hand[p]).map(p => [p, hand[p]] as [string, number])
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', minHeight: '24px', padding: '4px 0' }}>
-      <span style={{ fontSize: '11px', color: '#666', marginRight: '4px' }}>{isSente ? '先手' : '後手'}持ち駒:</span>
+    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minHeight: '44px', padding: '4px 0' }}>
+      <span style={{ fontSize: '11px', color: '#666', marginRight: '2px', whiteSpace: 'nowrap' }}>
+        {isSente ? '先手' : '後手'}持ち駒:
+      </span>
       {entries.length === 0
         ? <span style={{ fontSize: '12px', color: '#aaa' }}>なし</span>
         : entries.map(([p, n]) => (
-            <span key={p} style={{ fontSize: '14px', color: isSente ? '#222' : '#c0392b' }}>
-              {PIECE_KANJI[p]}{n > 1 ? `×${n}` : ''}
-            </span>
+            <div key={p} style={{ position: 'relative', display: 'inline-block' }}>
+              <img
+                src={getPieceUrl(p, isSente, false)}
+                style={{ width: '32px', height: '35px', objectFit: 'contain', display: 'block' }}
+                alt=""
+                draggable={false}
+              />
+              {n > 1 && (
+                <span style={{
+                  position: 'absolute', bottom: 1, right: -1,
+                  fontSize: '10px', color: '#c00', fontWeight: 'bold', lineHeight: 1,
+                }}>
+                  {n}
+                </span>
+              )}
+            </div>
           ))
       }
     </div>
   )
 }
+
+const BOARD_W = 486
+const BOARD_H = Math.round(BOARD_W * (960 / 878))
+// px offset from board image edge to the first grid line (tune if pieces drift)
+const BOARD_PAD = Math.round(BOARD_W * 18 / 878)
 
 function ShogiBoard({ sfen }: { sfen: string }): JSX.Element {
   const parts = sfen.split(' ')
@@ -196,41 +226,30 @@ function ShogiBoard({ sfen }: { sfen: string }): JSX.Element {
   return (
     <div style={{ userSelect: 'none' }}>
       <HandArea hand={goteHand} isSente={false} />
-      <div style={{ display: 'flex', paddingLeft: '20px' }}>
-        {COLS.map(c => (
-          <div key={c} style={{ width: '52px', textAlign: 'center', fontSize: '12px', color: '#666' }}>
-            {c}
-          </div>
-        ))}
-      </div>
-      <div style={{ display: 'flex' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(9, 52px)', border: '2px solid #444' }}>
+      <div style={{ position: 'relative', width: BOARD_W, height: BOARD_H }}>
+        <img
+          src={boardUrl}
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
+          alt=""
+          draggable={false}
+        />
+        <div style={{
+          position: 'absolute',
+          top: BOARD_PAD, left: BOARD_PAD, right: BOARD_PAD, bottom: BOARD_PAD,
+          display: 'grid',
+          gridTemplateColumns: 'repeat(9, 1fr)',
+          gridTemplateRows: 'repeat(9, 1fr)',
+        }}>
           {board.flat().map((cell, i) => (
-            <div
-              key={i}
-              style={{
-                width: '52px', height: '56px', border: '1px solid #888', background: '#e8c87a',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}
-            >
+            <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               {cell && (
-                <span style={{
-                  fontSize: '18px',
-                  color: cell.sente ? '#1a1a1a' : '#c0392b',
-                  display: 'inline-block',
-                  transform: cell.sente ? 'none' : 'rotate(180deg)',
-                  lineHeight: 1,
-                }}>
-                  {pieceText(cell)}
-                </span>
+                <img
+                  src={getPieceUrl(cell.piece, cell.sente, cell.promoted)}
+                  style={{ width: '90%', height: '90%', objectFit: 'contain' }}
+                  alt=""
+                  draggable={false}
+                />
               )}
-            </div>
-          ))}
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          {ROWS.map(r => (
-            <div key={r} style={{ height: '56px', display: 'flex', alignItems: 'center', paddingLeft: '6px', fontSize: '12px', color: '#666' }}>
-              {r}
             </div>
           ))}
         </div>
