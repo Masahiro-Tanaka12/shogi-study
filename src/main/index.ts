@@ -2,7 +2,11 @@ import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
 import { join, basename } from 'path'
 import { readFile } from 'fs/promises'
 import { parseKif } from '../shared/kifu'
-import { buildBoardState, boardToSfen, debugBoard } from '../shared/board'
+import { buildBoardState, boardToSfen, debugBoard, enumeratePositions, createInitialBoard } from '../shared/board'
+import { aggregatePositions, logPositionStats, type PositionStats } from '../shared/stats'
+
+const allStats: PositionStats = {}
+const INITIAL_SFEN = boardToSfen(createInitialBoard())
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -56,7 +60,13 @@ app.whenReady().then(() => {
               const state = buildBoardState(moves)
               console.log('[sfen]', boardToSfen(state))
               debugBoard(state)
+
+              const positions = enumeratePositions(moves)
+              console.log(`[positions] ${positions.length} 局面 (expected: ${moves.length + 1})`)
+              aggregatePositions(positions, allStats)
             }
+
+            logPositionStats(allStats, INITIAL_SFEN, '初期局面')
           }
         },
           { type: 'separator' },

@@ -33,3 +33,8 @@ export interface BoardState {
   sideToMove: Player
   moveCount: number
 }
+
+export interface PositionEntry {
+  sfen: string
+  nextMove: Move | null  // null = 最終局面（次の手なし）
+}

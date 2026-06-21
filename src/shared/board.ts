@@ -1,7 +1,7 @@
 // 盤面状態の生成と手の適用
 // 現在は平手初期局面のみ対応。駒落ち局面は未実装。
 
-import type { Move, Player, Square, BoardState } from './types'
+import type { Move, Player, Square, BoardState, PositionEntry } from './types'
 
 // 成り駒の表示名（単一全角文字に統一）
 const PROMOTED_DISPLAY: Record<string, string> = {
@@ -183,6 +183,23 @@ export function applyMove(state: BoardState, move: Move): BoardState {
   }
 
   return { board, senteHand, goteHand, sideToMove: next, moveCount: move.moveNumber }
+}
+
+// 全局面を列挙する。エントリ数は moves.length + 1（最終局面を含む）
+export function enumeratePositions(moves: Move[]): PositionEntry[] {
+  const entries: PositionEntry[] = []
+  let state = createInitialBoard()
+
+  for (const move of moves) {
+    entries.push({ sfen: boardToSfen(state), nextMove: move })
+    state = applyMove(state, move)
+    if (move.isSpecial) break
+  }
+
+  // 最終局面（次の手なし）
+  entries.push({ sfen: boardToSfen(state), nextMove: null })
+
+  return entries
 }
 
 // moves 全体（または upToMove 手目まで）を初期局面から適用して BoardState を返す
