@@ -1,6 +1,8 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
-import type { KifuFile } from '../../shared/types'
+import type { KifuFile, Move, Player } from '../../shared/types'
+import { sfenToBoard, applyMove, boardToSfen } from '../../shared/board'
+import { findToSquares, findDropSquares } from '../../shared/moveGen'
 import boardUrl from './assets/shogi/light_878x960.png'
 
 interface MoveCount { move: string; count: number }
@@ -20,6 +22,31 @@ declare global {
   }
 }
 
+// ---- 駒の成り判定ヘルパー ----
+
+const NON_PROMOTABLE = new Set(['金', '王', '玉'])
+
+function canPromote(piece: string, promoted: boolean): boolean {
+  return !promoted && !NON_PROMOTABLE.has(piece)
+}
+
+function inPromotionZone(player: Player, rank: number): boolean {
+  return player === 'sente' ? rank <= 3 : rank >= 7
+}
+
+// 打ち歩詰め判定は省略（MVP範囲外）
+function mustPromote(piece: string, player: Player, toRank: number): boolean {
+  if (piece === '歩' || piece === '香') {
+    return player === 'sente' ? toRank === 1 : toRank === 9
+  }
+  if (piece === '桂') {
+    return player === 'sente' ? toRank <= 2 : toRank >= 8
+  }
+  return false
+}
+
+// ---- SFENテキストからファイル名を推測 ----
+
 function suggestFileName(text: string): string {
   const sente = text.match(/^先手[：:]\s*(.+)$/m)?.[1]?.trim()
   const gote  = text.match(/^後手[：:]\s*(.+)$/m)?.[1]?.trim()
@@ -28,6 +55,57 @@ function suggestFileName(text: string): string {
   if (date) return `${date[1]}${date[2]}${date[3]}.kif`
   return `kifu_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.kif`
 }
+
+// ---- 成り確認ダイアログ ----
+
+interface PromoteDialogProps {
+  onResolve: (promote: boolean) => void
+}
+
+function PromoteDialog({ onResolve }: PromoteDialogProps): JSX.Element {
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000,
+      }}
+    >
+      <div
+        style={{
+          background: '#fff', borderRadius: '8px', padding: '24px 32px',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px',
+        }}
+      >
+        <p style={{ margin: 0, fontSize: '15px', color: '#222' }}>成りますか？</p>
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <button
+            onClick={() => onResolve(true)}
+            style={{
+              padding: '8px 24px', fontSize: '14px', border: 'none',
+              borderRadius: '4px', cursor: 'pointer',
+              background: '#2a5bd7', color: '#fff',
+            }}
+          >
+            成る
+          </button>
+          <button
+            onClick={() => onResolve(false)}
+            style={{
+              padding: '8px 24px', fontSize: '14px',
+              border: '1px solid #aaa', borderRadius: '4px', cursor: 'pointer',
+              background: '#fff', color: '#333',
+            }}
+          >
+            不成
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---- KIFペーストモーダル ----
 
 function PasteKifModal({ onClose, onSaved }: { onClose: () => void; onSaved: (files: KifuFile[]) => void }): JSX.Element {
   const [text, setText] = useState('')
@@ -120,6 +198,8 @@ function PasteKifModal({ onClose, onSaved }: { onClose: () => void; onSaved: (fi
   )
 }
 
+// ---- 駒画像 ----
+
 const _pieceModules = import.meta.glob('./assets/shogi/*.png', { eager: true }) as Record<string, { default: string }>
 const PIECE_URLS: Record<string, string> = Object.fromEntries(
   Object.entries(_pieceModules).map(([path, mod]) => [path.split('/').pop()!.replace('.png', ''), mod.default])
@@ -182,7 +262,28 @@ function parseSfenHand(handPart: string): { sente: Record<string, number>; gote:
 
 const HAND_ORDER = ['r', 'b', 'g', 's', 'n', 'l', 'p']
 
-function HandArea({ hand, isSente }: { hand: Record<string, number>; isSente: boolean }): JSX.Element {
+// SFEN lowercase → 日本語駒名（持ち駒クリック用）
+const SFEN_TO_JP: Record<string, string> = {
+  'p': '歩', 'l': '香', 'n': '桂', 's': '銀', 'g': '金', 'b': '角', 'r': '飛',
+}
+
+// ---- 選択状態 ----
+
+type BoardSelection =
+  | { kind: 'board'; fromFile: number; fromRank: number; validDests: [number, number][] }
+  | { kind: 'hand'; piece: string; validDests: [number, number][] }
+  | null
+
+// ---- HandArea ----
+
+interface HandAreaProps {
+  hand: Record<string, number>
+  isSente: boolean
+  selection: BoardSelection
+  onHandClick: (piece: string, isSente: boolean) => void
+}
+
+function HandArea({ hand, isSente, selection, onHandClick }: HandAreaProps): JSX.Element {
   const entries = HAND_ORDER.filter(p => hand[p]).map(p => [p, hand[p]] as [string, number])
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minHeight: '44px', padding: '4px 0' }}>
@@ -191,28 +292,43 @@ function HandArea({ hand, isSente }: { hand: Record<string, number>; isSente: bo
       </span>
       {entries.length === 0
         ? <span style={{ fontSize: '12px', color: '#aaa' }}>なし</span>
-        : entries.map(([p, n]) => (
-            <div key={p} style={{ position: 'relative', display: 'inline-block' }}>
-              <img
-                src={getPieceUrl(p, isSente, false)}
-                style={{ width: '32px', height: '35px', objectFit: 'contain', display: 'block' }}
-                alt=""
-                draggable={false}
-              />
-              {n > 1 && (
-                <span style={{
-                  position: 'absolute', bottom: 1, right: -1,
-                  fontSize: '10px', color: '#c00', fontWeight: 'bold', lineHeight: 1,
-                }}>
-                  {n}
-                </span>
-              )}
-            </div>
-          ))
+        : entries.map(([p, n]) => {
+            const jpPiece = SFEN_TO_JP[p] ?? p
+            const isSelected = selection?.kind === 'hand' && selection.piece === jpPiece
+            return (
+              <div
+                key={p}
+                onClick={() => onHandClick(p, isSente)}
+                style={{
+                  position: 'relative', display: 'inline-block', cursor: 'pointer',
+                  outline: isSelected ? '2px solid #2a5bd7' : 'none',
+                  borderRadius: '2px',
+                  background: isSelected ? 'rgba(42,91,215,0.12)' : 'transparent',
+                }}
+              >
+                <img
+                  src={getPieceUrl(p, isSente, false)}
+                  style={{ width: '32px', height: '35px', objectFit: 'contain', display: 'block' }}
+                  alt=""
+                  draggable={false}
+                />
+                {n > 1 && (
+                  <span style={{
+                    position: 'absolute', bottom: 1, right: -1,
+                    fontSize: '10px', color: '#c00', fontWeight: 'bold', lineHeight: 1,
+                  }}>
+                    {n}
+                  </span>
+                )}
+              </div>
+            )
+          })
       }
     </div>
   )
 }
+
+// ---- ResizeHandle ----
 
 function ResizeHandle(): JSX.Element {
   const [hovered, setHovered] = useState(false)
@@ -242,16 +358,30 @@ function ResizeHandle(): JSX.Element {
   )
 }
 
-function ShogiBoard({ sfen, boardW }: { sfen: string; boardW: number }): JSX.Element {
+// ---- ShogiBoard ----
+
+interface ShogiBoardProps {
+  sfen: string
+  boardW: number
+  selection: BoardSelection
+  onSquareClick: (file: number, rank: number) => void
+  onHandClick: (piece: string, isSente: boolean) => void
+}
+
+function ShogiBoard({ sfen, boardW, selection, onSquareClick, onHandClick }: ShogiBoardProps): JSX.Element {
   const boardH = Math.round(boardW * 960 / 878)
   const boardPad = Math.round(boardW * 18 / 878)
   const parts = sfen.split(' ')
   const board = parseSfenBoard(parts[0])
   const { sente: senteHand, gote: goteHand } = parseSfenHand(parts[2] ?? '-')
 
+  const validDestSet = new Set(
+    (selection?.validDests ?? []).map(([f, r]) => `${f},${r}`)
+  )
+
   return (
     <div style={{ userSelect: 'none' }}>
-      <HandArea hand={goteHand} isSente={false} />
+      <HandArea hand={goteHand} isSente={false} selection={selection} onHandClick={onHandClick} />
       <div style={{ position: 'relative', width: boardW, height: boardH }}>
         <img
           src={boardUrl}
@@ -266,21 +396,56 @@ function ShogiBoard({ sfen, boardW }: { sfen: string; boardW: number }): JSX.Ele
           gridTemplateColumns: 'repeat(9, 1fr)',
           gridTemplateRows: 'repeat(9, 1fr)',
         }}>
-          {board.flat().map((cell, i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              {cell && (
-                <img
-                  src={getPieceUrl(cell.piece, cell.sente, cell.promoted)}
-                  style={{ width: '90%', height: '90%', objectFit: 'contain' }}
-                  alt=""
-                  draggable={false}
-                />
-              )}
-            </div>
-          ))}
+          {board.flat().map((cell, i) => {
+            // SFEN board は file 9→1 × rank 1→9 の順で並ぶ
+            const rank = Math.floor(i / 9) + 1
+            const file = 9 - (i % 9)
+            const isSelected = selection?.kind === 'board'
+              && selection.fromFile === file && selection.fromRank === rank
+            const isValidDest = validDestSet.has(`${file},${rank}`)
+
+            return (
+              <div
+                key={i}
+                onClick={() => onSquareClick(file, rank)}
+                style={{
+                  position: 'relative',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  cursor: 'pointer',
+                }}
+              >
+                {/* 選択中の駒ハイライト */}
+                {isSelected && (
+                  <div style={{
+                    position: 'absolute', inset: 0,
+                    background: 'rgba(42,91,215,0.35)',
+                    pointerEvents: 'none',
+                  }} />
+                )}
+                {/* 移動先候補ハイライト */}
+                {isValidDest && (
+                  <div style={{
+                    position: 'absolute', inset: 0,
+                    background: cell
+                      ? 'rgba(220,40,40,0.35)'   // 相手駒あり = 赤（取れる）
+                      : 'rgba(40,180,80,0.35)',   // 空升 = 緑
+                    pointerEvents: 'none',
+                  }} />
+                )}
+                {cell && (
+                  <img
+                    src={getPieceUrl(cell.piece, cell.sente, cell.promoted)}
+                    style={{ width: '90%', height: '90%', objectFit: 'contain', position: 'relative' }}
+                    alt=""
+                    draggable={false}
+                  />
+                )}
+              </div>
+            )
+          })}
         </div>
       </div>
-      <HandArea hand={senteHand} isSente={true} />
+      <HandArea hand={senteHand} isSente={true} selection={selection} onHandClick={onHandClick} />
     </div>
   )
 }
@@ -315,7 +480,6 @@ function KifuListItem({ kifu, onTagAdd, onTagRemove }: KifuListItemProps): JSX.E
     >
       <div style={{ fontSize: '13px', color: '#333', marginBottom: '4px' }}>{kifu.fileName}</div>
 
-      {/* タグバッジ */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', alignItems: 'center' }}>
         {kifu.tags.map(tag => (
           <span
@@ -334,7 +498,6 @@ function KifuListItem({ kifu, onTagAdd, onTagRemove }: KifuListItemProps): JSX.E
           </span>
         ))}
 
-        {/* タグ入力欄 */}
         <input
           ref={inputRef}
           value={input}
@@ -351,8 +514,6 @@ function KifuListItem({ kifu, onTagAdd, onTagRemove }: KifuListItemProps): JSX.E
     </li>
   )
 }
-
-// ---- App ----
 
 // ---- StatsPanel ----
 
@@ -388,6 +549,8 @@ function StatsPanel({ stats, prefix, onMoveClick }: { stats: MoveCount[]; prefix
   )
 }
 
+// ---- App ----
+
 const INITIAL_SFEN = 'lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1'
 
 function sidePrefix(sfen: string): string {
@@ -401,6 +564,8 @@ function App(): JSX.Element {
   const [currentSfen, setCurrentSfen] = useState(INITIAL_SFEN)
   const [sfenHistory, setSfenHistory] = useState<string[]>([])
   const [stats, setStats] = useState<MoveCount[]>([])
+  const [selection, setSelection] = useState<BoardSelection>(null)
+  const [promoteResolver, setPromoteResolver] = useState<((v: boolean) => void) | null>(null)
   const mainRef = useRef<HTMLDivElement>(null)
   const [boardW, setBoardW] = useState(486)
 
@@ -409,7 +574,6 @@ function App(): JSX.Element {
     if (!el) return
     const obs = new ResizeObserver(([entry]) => {
       const { width, height } = entry.contentRect
-      // 150px = gote hand (52) + sente hand (52) + nav (40) + gaps (6)
       const avW = width - 24
       const avH = height - 150
       setBoardW(Math.max(180, Math.floor(Math.min(avW, avH * (878 / 960)))))
@@ -435,14 +599,29 @@ function App(): JSX.Element {
     window.api.getPositionStats(currentSfen, tagQuery).then(setStats)
   }, [currentSfen, tagQuery])
 
+  // 成り確認を Promise で待つ
+  function askPromote(): Promise<boolean> {
+    return new Promise(resolve => {
+      setPromoteResolver(() => resolve)
+    })
+  }
+
+  function handlePromoteResolve(v: boolean): void {
+    setPromoteResolver(null)
+    promoteResolver?.(v)
+  }
+
+  // 統計パネルの手クリック（DB lookup）
   async function handleMoveClick(move: string): Promise<void> {
     const nextSfen = await window.api.applyMoveString(currentSfen, move)
     if (!nextSfen) return
     setSfenHistory(h => [...h, currentSfen])
     setCurrentSfen(nextSfen)
+    setSelection(null)
   }
 
   function handleBack(): void {
+    setSelection(null)
     setSfenHistory(h => {
       if (h.length === 0) return h
       const prev = [...h]
@@ -453,9 +632,102 @@ function App(): JSX.Element {
   }
 
   function handleReset(): void {
+    setSelection(null)
     setSfenHistory([])
     setCurrentSfen(INITIAL_SFEN)
   }
+
+  // 盤面セルのクリックハンドラ
+  const handleSquareClick = useCallback(async (file: number, rank: number) => {
+    const state = sfenToBoard(currentSfen)
+    const player = state.sideToMove
+
+    if (selection) {
+      const isValidDest = selection.validDests.some(([f, r]) => f === file && r === rank)
+
+      if (isValidDest) {
+        // 手を生成する
+        let move: Move
+
+        if (selection.kind === 'board') {
+          const fromSq = state.board[selection.fromRank - 1][selection.fromFile - 1]!
+          let isPromotion = false
+
+          if (canPromote(fromSq.piece, fromSq.promoted)) {
+            const enters = inPromotionZone(player, rank)
+            const leaves = inPromotionZone(player, selection.fromRank)
+            if (mustPromote(fromSq.piece, player, rank)) {
+              isPromotion = true
+            } else if (enters || leaves) {
+              isPromotion = await askPromote()
+            }
+          }
+
+          move = {
+            moveNumber: state.moveCount + 1,
+            fromFile: selection.fromFile, fromRank: selection.fromRank,
+            toFile: file, toRank: rank,
+            piece: fromSq.piece, isDrop: false, isPromotion, isSpecial: false,
+          }
+        } else {
+          // 持ち駒を打つ
+          move = {
+            moveNumber: state.moveCount + 1,
+            toFile: file, toRank: rank,
+            piece: selection.piece, isDrop: true, isPromotion: false, isSpecial: false,
+          }
+        }
+
+        const newState = applyMove(state, move)
+        const newSfen = boardToSfen(newState)
+        setSfenHistory(h => [...h, currentSfen])
+        setCurrentSfen(newSfen)
+        setSelection(null)
+        return
+      }
+
+      // 有効な行き先でない場合: 同じ手番の駒なら選択切替
+      const clicked = state.board[rank - 1][file - 1]
+      if (clicked?.player === player) {
+        const dests = findToSquares(state.board, file, rank, player)
+        setSelection({ kind: 'board', fromFile: file, fromRank: rank, validDests: dests })
+        return
+      }
+
+      // 何もなければ選択解除
+      setSelection(null)
+      return
+    }
+
+    // 選択なし: 手番の駒をクリックで選択
+    const sq = state.board[rank - 1][file - 1]
+    if (sq?.player === player) {
+      const dests = findToSquares(state.board, file, rank, player)
+      setSelection({ kind: 'board', fromFile: file, fromRank: rank, validDests: dests })
+    }
+  }, [currentSfen, selection, promoteResolver])
+
+  // 持ち駒クリックハンドラ
+  const handleHandClick = useCallback((pieceChar: string, isSente: boolean) => {
+    const state = sfenToBoard(currentSfen)
+    const player = state.sideToMove
+    const clickedPlayer: Player = isSente ? 'sente' : 'gote'
+
+    // 手番の持ち駒のみ選択可能
+    if (clickedPlayer !== player) { setSelection(null); return }
+
+    const jpPiece = SFEN_TO_JP[pieceChar] ?? pieceChar
+    const hand = isSente ? state.senteHand : state.goteHand
+
+    // 同じ持ち駒を再クリックで選択解除
+    if (selection?.kind === 'hand' && selection.piece === jpPiece) {
+      setSelection(null)
+      return
+    }
+
+    const dests = findDropSquares(state.board, jpPiece, hand, player)
+    setSelection({ kind: 'hand', piece: jpPiece, validDests: dests })
+  }, [currentSfen, selection])
 
   function handleTagAdd(kifuPath: string, tagName: string): void {
     window.api.addTag(kifuPath, tagName)
@@ -490,6 +762,8 @@ function App(): JSX.Element {
 
   return (
     <div style={{ height: '100vh', fontFamily: "'Hiragino Kaku Gothic ProN', 'Yu Gothic', sans-serif", overflow: 'hidden' }}>
+      {promoteResolver && <PromoteDialog onResolve={handlePromoteResolve} />}
+
       {showPasteModal && (
         <PasteKifModal
           onClose={() => setShowPasteModal(false)}
@@ -514,7 +788,13 @@ function App(): JSX.Element {
             }}
           >
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-              <ShogiBoard sfen={currentSfen} boardW={boardW} />
+              <ShogiBoard
+                sfen={currentSfen}
+                boardW={boardW}
+                selection={selection}
+                onSquareClick={handleSquareClick}
+                onHandClick={handleHandClick}
+              />
               <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
                 <button
                   onClick={handleBack}

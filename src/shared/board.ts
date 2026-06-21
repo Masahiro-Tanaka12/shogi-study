@@ -202,6 +202,61 @@ export function enumeratePositions(moves: Move[]): PositionEntry[] {
   return entries
 }
 
+const SFEN_TO_PIECE: Record<string, string> = {
+  'P': '歩', 'L': '香', 'N': '桂', 'S': '銀', 'G': '金', 'B': '角', 'R': '飛',
+}
+
+// SFEN 文字列 → BoardState（boardToSfen の逆関数）
+export function sfenToBoard(sfen: string): BoardState {
+  const parts = sfen.split(' ')
+  const boardPart = parts[0] ?? ''
+  const sidePart = parts[1] ?? 'b'
+  const handPart = parts[2] ?? '-'
+  const countPart = parts[3] ?? '1'
+
+  const board: (Square | null)[][] = Array.from({ length: 9 }, () => Array(9).fill(null))
+
+  let rankIdx = 0
+  let fileIdx = 8 // SFEN は file 9→1 (index 8→0)
+  let promoted = false
+
+  for (const ch of boardPart) {
+    if (ch === '/') { rankIdx++; fileIdx = 8; promoted = false; continue }
+    if (ch === '+') { promoted = true; continue }
+    if (/\d/.test(ch)) { fileIdx -= Number(ch); promoted = false; continue }
+    const isSente = ch === ch.toUpperCase()
+    const letter = ch.toUpperCase()
+    const piece = letter === 'K' ? (isSente ? '王' : '玉') : (SFEN_TO_PIECE[letter] ?? letter)
+    board[rankIdx][fileIdx] = { piece, promoted, player: isSente ? 'sente' : 'gote' }
+    fileIdx--
+    promoted = false
+  }
+
+  const senteHand: Record<string, number> = {}
+  const goteHand: Record<string, number> = {}
+  if (handPart !== '-') {
+    let count = 0
+    for (const ch of handPart) {
+      if (/\d/.test(ch)) { count = count * 10 + Number(ch); continue }
+      const n = count || 1
+      count = 0
+      const isSente = ch === ch.toUpperCase()
+      const letter = ch.toUpperCase()
+      const piece = letter === 'K' ? (isSente ? '王' : '玉') : (SFEN_TO_PIECE[letter] ?? letter)
+      if (isSente) senteHand[piece] = (senteHand[piece] ?? 0) + n
+      else goteHand[piece] = (goteHand[piece] ?? 0) + n
+    }
+  }
+
+  return {
+    board,
+    senteHand,
+    goteHand,
+    sideToMove: sidePart === 'b' ? 'sente' : 'gote',
+    moveCount: Math.max(0, parseInt(countPart, 10) - 1),
+  }
+}
+
 // moves 全体（または upToMove 手目まで）を初期局面から適用して BoardState を返す
 export function buildBoardState(moves: Move[], upToMove?: number): BoardState {
   let state = createInitialBoard()
