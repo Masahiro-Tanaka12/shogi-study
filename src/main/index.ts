@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
-import { join } from 'path'
+import { join, basename } from 'path'
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -33,7 +33,20 @@ app.whenReady().then(() => {
       {
         label: 'ファイル',
         submenu: [
-          { label: '棋譜を開く', enabled: false },
+          {
+          label: '棋譜を開く',
+          click: async () => {
+            const win = BrowserWindow.getFocusedWindow()
+            if (!win) return
+            const { filePaths } = await dialog.showOpenDialog(win, {
+              properties: ['openFile', 'multiSelections'],
+              filters: [{ name: 'KIF ファイル', extensions: ['kif'] }]
+            })
+            if (filePaths.length === 0) return
+            const files = filePaths.map(p => ({ fileName: basename(p), path: p, tags: [] }))
+            win.webContents.send('kifu-file-opened', files)
+          }
+        },
           { type: 'separator' },
           { label: '終了', role: 'quit' }
         ]

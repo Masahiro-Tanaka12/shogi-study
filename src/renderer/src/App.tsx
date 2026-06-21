@@ -1,7 +1,11 @@
+import { useState, useEffect } from 'react'
+import type { KifuFile } from '../../shared/types'
+
 declare global {
   interface Window {
     api: {
       selectKifuFile: () => Promise<string | null>
+      onKifuFileOpened: (callback: (files: KifuFile[]) => void) => () => void
     }
   }
 }
@@ -38,6 +42,19 @@ function ShogiBoard(): JSX.Element {
 }
 
 function App(): JSX.Element {
+  const [kifuList, setKifuList] = useState<KifuFile[]>([])
+
+  useEffect(() => {
+    const cleanup = window.api.onKifuFileOpened(files => {
+      setKifuList(prev => {
+        const existingPaths = new Set(prev.map(f => f.path))
+        const newFiles = files.filter(f => !existingPaths.has(f.path))
+        return [...prev, ...newFiles]
+      })
+    })
+    return cleanup
+  }, [])
+
   return (
     <div style={{ display: 'flex', height: '100vh', fontFamily: "'Hiragino Kaku Gothic ProN', 'Yu Gothic', sans-serif", overflow: 'hidden' }}>
       <div style={{ flex: '1 1 auto', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f5f0e8' }}>
@@ -46,7 +63,29 @@ function App(): JSX.Element {
       <div style={{ width: '300px', flexShrink: 0, display: 'flex', flexDirection: 'column', borderLeft: '1px solid #ccc', background: '#fff' }}>
         <div style={{ flex: 1, padding: '16px', borderBottom: '1px solid #ccc', overflow: 'auto' }}>
           <h3 style={{ margin: '0 0 12px', fontSize: '14px', color: '#333' }}>棋譜リスト</h3>
-          <p style={{ fontSize: '13px', color: '#999', margin: 0 }}>棋譜がありません</p>
+          {kifuList.length === 0 ? (
+            <p style={{ fontSize: '13px', color: '#999', margin: 0 }}>棋譜がありません</p>
+          ) : (
+            <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+              {kifuList.map(f => (
+                <li
+                  key={f.path}
+                  onDoubleClick={() => console.log(f.fileName)}
+                  style={{
+                    padding: '6px 8px',
+                    fontSize: '13px',
+                    color: '#333',
+                    cursor: 'default',
+                    borderRadius: '4px',
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = '#f0f0f0')}
+                  onMouseLeave={e => (e.currentTarget.style.background = '')}
+                >
+                  {f.fileName}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
         <div style={{ flex: 1, padding: '16px', overflow: 'auto' }}>
           <h3 style={{ margin: '0 0 12px', fontSize: '14px', color: '#333' }}>統計</h3>
