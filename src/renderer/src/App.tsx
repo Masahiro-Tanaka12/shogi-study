@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { Group, Panel, Separator } from 'react-resizable-panels'
 import type { KifuFile } from '../../shared/types'
 import boardUrl from './assets/shogi/light_878x960.png'
 
@@ -213,12 +214,37 @@ function HandArea({ hand, isSente }: { hand: Record<string, number>; isSente: bo
   )
 }
 
-const BOARD_W = 486
-const BOARD_H = Math.round(BOARD_W * (960 / 878))
-// px offset from board image edge to the first grid line (tune if pieces drift)
-const BOARD_PAD = Math.round(BOARD_W * 18 / 878)
+function ResizeHandle(): JSX.Element {
+  const [hovered, setHovered] = useState(false)
+  return (
+    <Separator
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        width: '6px',
+        background: hovered ? '#c8d8f0' : '#e4e4e4',
+        cursor: 'col-resize',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexShrink: 0,
+        transition: 'background 0.12s',
+      }}
+    >
+      <div style={{
+        width: '2px',
+        height: '36px',
+        borderRadius: '1px',
+        background: hovered ? '#2a5bd7' : '#b8b8b8',
+        transition: 'background 0.12s',
+      }} />
+    </Separator>
+  )
+}
 
-function ShogiBoard({ sfen }: { sfen: string }): JSX.Element {
+function ShogiBoard({ sfen, boardW }: { sfen: string; boardW: number }): JSX.Element {
+  const boardH = Math.round(boardW * 960 / 878)
+  const boardPad = Math.round(boardW * 18 / 878)
   const parts = sfen.split(' ')
   const board = parseSfenBoard(parts[0])
   const { sente: senteHand, gote: goteHand } = parseSfenHand(parts[2] ?? '-')
@@ -226,7 +252,7 @@ function ShogiBoard({ sfen }: { sfen: string }): JSX.Element {
   return (
     <div style={{ userSelect: 'none' }}>
       <HandArea hand={goteHand} isSente={false} />
-      <div style={{ position: 'relative', width: BOARD_W, height: BOARD_H }}>
+      <div style={{ position: 'relative', width: boardW, height: boardH }}>
         <img
           src={boardUrl}
           style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
@@ -235,7 +261,7 @@ function ShogiBoard({ sfen }: { sfen: string }): JSX.Element {
         />
         <div style={{
           position: 'absolute',
-          top: BOARD_PAD, left: BOARD_PAD, right: BOARD_PAD, bottom: BOARD_PAD,
+          top: boardPad, left: boardPad, right: boardPad, bottom: boardPad,
           display: 'grid',
           gridTemplateColumns: 'repeat(9, 1fr)',
           gridTemplateRows: 'repeat(9, 1fr)',
@@ -343,16 +369,16 @@ function StatsPanel({ stats, prefix, onMoveClick }: { stats: MoveCount[]; prefix
             <li
               key={move}
               onClick={() => onMoveClick(move)}
-              style={{ marginBottom: '6px', cursor: 'pointer', padding: '3px 4px', borderRadius: '4px' }}
+              style={{ marginBottom: '8px', cursor: 'pointer', padding: '4px 6px', borderRadius: '4px' }}
               onMouseEnter={e => (e.currentTarget.style.background = '#f0f4ff')}
               onMouseLeave={e => (e.currentTarget.style.background = '')}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#222' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#222', marginBottom: '3px' }}>
                 <span>{prefix}{move}</span>
-                <span style={{ color: '#555' }}>{count}回 ({pct}%)</span>
+                <span style={{ color: '#555', fontSize: '12px' }}>{count}局 {pct}%</span>
               </div>
-              <div style={{ height: '4px', background: '#eee', borderRadius: '2px', marginTop: '2px' }}>
-                <div style={{ height: '100%', width: `${barWidth}%`, background: '#2a5bd7', borderRadius: '2px' }} />
+              <div style={{ height: '6px', background: '#dde4f0', borderRadius: '3px' }}>
+                <div style={{ height: '100%', width: `${barWidth}%`, background: '#2a5bd7', borderRadius: '3px' }} />
               </div>
             </li>
           )
@@ -375,6 +401,22 @@ function App(): JSX.Element {
   const [currentSfen, setCurrentSfen] = useState(INITIAL_SFEN)
   const [sfenHistory, setSfenHistory] = useState<string[]>([])
   const [stats, setStats] = useState<MoveCount[]>([])
+  const mainRef = useRef<HTMLDivElement>(null)
+  const [boardW, setBoardW] = useState(486)
+
+  useEffect(() => {
+    const el = mainRef.current
+    if (!el) return
+    const obs = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect
+      // 150px = gote hand (52) + sente hand (52) + nav (40) + gaps (6)
+      const avW = width - 24
+      const avH = height - 150
+      setBoardW(Math.max(180, Math.floor(Math.min(avW, avH * (878 / 960)))))
+    })
+    obs.observe(el)
+    return () => obs.disconnect()
+  }, [])
 
   useEffect(() => {
     window.api.getKifuList().then(files => setKifuList(files))
@@ -442,107 +484,127 @@ function App(): JSX.Element {
     ? kifuList.filter(f => f.tags.some(t => t.includes(query)))
     : kifuList
 
+  const backDisabled = sfenHistory.length === 0
+  const resetDisabled = sfenHistory.length === 0 && currentSfen === INITIAL_SFEN
+  const btnBase: React.CSSProperties = { padding: '5px 14px', fontSize: '12px', border: '1px solid #aaa', borderRadius: '4px' }
+
   return (
-    <div style={{ display: 'flex', height: '100vh', fontFamily: "'Hiragino Kaku Gothic ProN', 'Yu Gothic', sans-serif", overflow: 'hidden' }}>
+    <div style={{ height: '100vh', fontFamily: "'Hiragino Kaku Gothic ProN', 'Yu Gothic', sans-serif", overflow: 'hidden' }}>
       {showPasteModal && (
         <PasteKifModal
           onClose={() => setShowPasteModal(false)}
           onSaved={files => setKifuList(files)}
         />
       )}
-      <div style={{ flex: '1 1 auto', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#f5f0e8', gap: '12px' }}>
-        <ShogiBoard sfen={currentSfen} />
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button
-            onClick={handleBack}
-            disabled={sfenHistory.length === 0}
-            style={{
-              padding: '5px 14px', fontSize: '12px', cursor: sfenHistory.length === 0 ? 'default' : 'pointer',
-              border: '1px solid #aaa', borderRadius: '4px',
-              background: sfenHistory.length === 0 ? '#f0f0f0' : '#fff',
-              color: sfenHistory.length === 0 ? '#aaa' : '#333',
-            }}
-          >
-            ◀ 1手戻る
-          </button>
-          <button
-            onClick={handleReset}
-            disabled={sfenHistory.length === 0 && currentSfen === INITIAL_SFEN}
-            style={{
-              padding: '5px 14px', fontSize: '12px',
-              cursor: (sfenHistory.length === 0 && currentSfen === INITIAL_SFEN) ? 'default' : 'pointer',
-              border: '1px solid #aaa', borderRadius: '4px',
-              background: (sfenHistory.length === 0 && currentSfen === INITIAL_SFEN) ? '#f0f0f0' : '#fff',
-              color: (sfenHistory.length === 0 && currentSfen === INITIAL_SFEN) ? '#aaa' : '#333',
-            }}
-          >
-            初期局面
-          </button>
-        </div>
-      </div>
-      <div style={{ width: '300px', flexShrink: 0, display: 'flex', flexDirection: 'column', borderLeft: '1px solid #ccc', background: '#fff' }}>
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', borderBottom: '1px solid #ccc', overflow: 'hidden' }}>
-          <div style={{ padding: '12px 16px 8px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-              <h3 style={{ margin: 0, fontSize: '14px', color: '#333' }}>棋譜リスト</h3>
-              <button
-                onClick={() => setShowPasteModal(true)}
-                title="KIFテキストを貼り付けて追加"
-                style={{
-                  fontSize: '11px', padding: '3px 8px',
-                  border: '1px solid #ccc', borderRadius: '4px',
-                  cursor: 'pointer', background: '#fff', color: '#555',
-                }}
-              >
-                + テキストから追加
-              </button>
-            </div>
-            <input
-              value={tagQuery}
-              onChange={e => setTagQuery(e.target.value)}
-              placeholder="タグで絞り込み…"
-              style={{
-                width: '100%', boxSizing: 'border-box',
-                padding: '5px 8px', fontSize: '12px',
-                border: '1px solid #ccc', borderRadius: '4px', outline: 'none',
-              }}
-            />
-          </div>
 
-          <div style={{ flex: 1, overflowY: 'auto', padding: '0 8px 8px' }}>
-            {filtered.length === 0 ? (
-              <p style={{ fontSize: '13px', color: '#999', margin: '8px' }}>
-                {query ? 'タグが一致する棋譜がありません' : '棋譜がありません'}
+      <Group orientation="horizontal" style={{ height: '100%' }}>
+        {/* ── 盤パネル ── */}
+        <Panel defaultSize={45} minSize={25}>
+          <div
+            ref={mainRef}
+            style={{
+              height: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: '#f5f0e8',
+              overflow: 'hidden',
+              padding: '12px',
+              boxSizing: 'border-box',
+            }}
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+              <ShogiBoard sfen={currentSfen} boardW={boardW} />
+              <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
+                <button
+                  onClick={handleBack}
+                  disabled={backDisabled}
+                  style={{ ...btnBase, cursor: backDisabled ? 'default' : 'pointer', background: backDisabled ? '#f0f0f0' : '#fff', color: backDisabled ? '#aaa' : '#333' }}
+                >
+                  ◀ 1手戻る
+                </button>
+                <button
+                  onClick={handleReset}
+                  disabled={resetDisabled}
+                  style={{ ...btnBase, cursor: resetDisabled ? 'default' : 'pointer', background: resetDisabled ? '#f0f0f0' : '#fff', color: resetDisabled ? '#aaa' : '#333' }}
+                >
+                  初期局面
+                </button>
+              </div>
+            </div>
+          </div>
+        </Panel>
+
+        <ResizeHandle />
+
+        {/* ── 統計パネル ── */}
+        <Panel defaultSize={25} minSize={12}>
+          <div style={{
+            height: '100%',
+            overflowY: 'auto',
+            padding: '12px 16px',
+            boxSizing: 'border-box',
+            background: '#fafafa',
+          }}>
+            <h3 style={{ margin: '0 0 4px', fontSize: '14px', color: '#333' }}>統計</h3>
+            {tagQuery.trim() && (
+              <p style={{ margin: '0 0 10px', fontSize: '11px', color: '#2a5bd7' }}>
+                絞り込み中: #{tagQuery.trim()}
               </p>
+            )}
+            {stats.length === 0 ? (
+              <p style={{ fontSize: '13px', color: '#999', margin: 0 }}>データがありません</p>
             ) : (
-              <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>
-                {filtered.map(f => (
-                  <KifuListItem
-                    key={f.path}
-                    kifu={f}
-                    onTagAdd={name => handleTagAdd(f.path, name)}
-                    onTagRemove={name => handleTagRemove(f.path, name)}
-                  />
-                ))}
-              </ul>
+              <StatsPanel stats={stats} prefix={sidePrefix(currentSfen)} onMoveClick={handleMoveClick} />
             )}
           </div>
-        </div>
+        </Panel>
 
-        <div style={{ flex: 1, padding: '16px', overflow: 'auto' }}>
-          <h3 style={{ margin: '0 0 4px', fontSize: '14px', color: '#333' }}>統計</h3>
-          {tagQuery.trim() && (
-            <p style={{ margin: '0 0 10px', fontSize: '11px', color: '#2a5bd7' }}>
-              絞り込み中: #{tagQuery.trim()}
-            </p>
-          )}
-          {stats.length === 0 ? (
-            <p style={{ fontSize: '13px', color: '#999', margin: 0 }}>データがありません</p>
-          ) : (
-            <StatsPanel stats={stats} prefix={sidePrefix(currentSfen)} onMoveClick={handleMoveClick} />
-          )}
-        </div>
-      </div>
+        <ResizeHandle />
+
+        {/* ── 棋譜リストパネル ── */}
+        <Panel defaultSize={30} minSize={15}>
+          <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: '#fff' }}>
+            <div style={{ padding: '12px 16px 8px', flexShrink: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <h3 style={{ margin: 0, fontSize: '14px', color: '#333' }}>棋譜リスト</h3>
+                <button
+                  onClick={() => setShowPasteModal(true)}
+                  title="KIFテキストを貼り付けて追加"
+                  style={{ fontSize: '11px', padding: '3px 8px', border: '1px solid #ccc', borderRadius: '4px', cursor: 'pointer', background: '#fff', color: '#555' }}
+                >
+                  + テキストから追加
+                </button>
+              </div>
+              <input
+                value={tagQuery}
+                onChange={e => setTagQuery(e.target.value)}
+                placeholder="タグで絞り込み…"
+                style={{ width: '100%', boxSizing: 'border-box', padding: '5px 8px', fontSize: '12px', border: '1px solid #ccc', borderRadius: '4px', outline: 'none' }}
+              />
+            </div>
+
+            <div style={{ flex: 1, overflowY: 'auto', padding: '0 8px 8px' }}>
+              {filtered.length === 0 ? (
+                <p style={{ fontSize: '13px', color: '#999', margin: '8px' }}>
+                  {query ? 'タグが一致する棋譜がありません' : '棋譜がありません'}
+                </p>
+              ) : (
+                <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+                  {filtered.map(f => (
+                    <KifuListItem
+                      key={f.path}
+                      kifu={f}
+                      onTagAdd={name => handleTagAdd(f.path, name)}
+                      onTagRemove={name => handleTagRemove(f.path, name)}
+                    />
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </Panel>
+      </Group>
     </div>
   )
 }

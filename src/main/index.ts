@@ -1,8 +1,10 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
-import { join, basename } from 'path'
+import { join, basename, extname } from 'path'
 import { readFile, writeFile } from 'fs/promises'
 import iconv from 'iconv-lite'
 import { parseKif } from '../shared/kifu'
+import { parseKi2 } from '../shared/ki2'
+import { parseCsa } from '../shared/csa'
 import { buildBoardState, boardToSfen, debugBoard, enumeratePositions, createInitialBoard } from '../shared/board'
 import { aggregatePositions, logPositionStats, type PositionStats } from '../shared/stats'
 import { initDb, insertKifuIfNew, insertPositions, getAllKifus, addTag, removeTag, getPositionStats, getNextSfen, type Db } from './db'
@@ -34,7 +36,10 @@ async function processKifFile(p: string): Promise<void> {
   const buf = await readFile(p)
   const utf8 = buf.toString('utf-8')
   const content = utf8.includes('�') ? iconv.decode(buf, 'Shift_JIS') : utf8
-  const moves = parseKif(content)
+  const ext = extname(p).toLowerCase()
+  const moves = ext === '.ki2' ? parseKi2(content)
+    : ext === '.csa' ? parseCsa(content)
+    : parseKif(content)
   console.log(`[kifu] ${basename(p)}: ${moves.length} 手`)
   const state = buildBoardState(moves)
   console.log('[sfen]', boardToSfen(state))
@@ -56,7 +61,7 @@ async function processKifFile(p: string): Promise<void> {
 ipcMain.handle('select-kifu-file', async () => {
   const { filePaths } = await dialog.showOpenDialog({
     properties: ['openFile'],
-    filters: [{ name: 'KIF ファイル', extensions: ['kif'] }]
+    filters: [{ name: '棋譜ファイル', extensions: ['kif', 'ki2', 'csa'] }]
   })
   return filePaths[0] ?? null
 })
@@ -134,7 +139,7 @@ app.whenReady().then(async () => {
               if (!win) return
               const { filePaths } = await dialog.showOpenDialog(win, {
                 properties: ['openFile', 'multiSelections'],
-                filters: [{ name: 'KIF ファイル', extensions: ['kif'] }]
+                filters: [{ name: '棋譜ファイル', extensions: ['kif', 'ki2', 'csa'] }]
               })
               if (filePaths.length === 0) return
               const files = filePaths.map(p => ({ fileName: basename(p), path: p, tags: [] }))

@@ -13,7 +13,8 @@
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
-    "iconv-lite": "^0.7.2"
+    "iconv-lite": "^0.7.2",
+    "react-resizable-panels": "^4.11.2"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",
