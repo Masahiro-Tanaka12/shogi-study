@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
 import { join, basename } from 'path'
 import { readFile } from 'fs/promises'
 import { parseKif } from '../shared/kifu'
+import { buildBoardState, boardToSfen, debugBoard } from '../shared/board'
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -52,7 +53,9 @@ app.whenReady().then(() => {
               const content = await readFile(p, 'utf-8')
               const moves = parseKif(content)
               console.log(`[kifu] ${basename(p)}: ${moves.length} 手`)
-              console.log(moves)
+              const state = buildBoardState(moves)
+              console.log('[sfen]', boardToSfen(state))
+              debugBoard(state)
             }
           }
         },
