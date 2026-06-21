@@ -5,6 +5,10 @@ type KifuFile = { fileName: string; path: string; tags: string[] }
 contextBridge.exposeInMainWorld('api', {
   selectKifuFile: (): Promise<string | null> => ipcRenderer.invoke('select-kifu-file'),
   getKifuList: (): Promise<KifuFile[]> => ipcRenderer.invoke('get-kifu-list'),
+  addTag: (kifuPath: string, tagName: string): Promise<void> => ipcRenderer.invoke('add-tag', kifuPath, tagName),
+  removeTag: (kifuPath: string, tagName: string): Promise<void> => ipcRenderer.invoke('remove-tag', kifuPath, tagName),
+  getPositionStats: (sfen: string, tagQuery: string): Promise<{ move: string; count: number }[]> =>
+    ipcRenderer.invoke('get-position-stats', sfen, tagQuery),
   onKifuFileOpened: (callback: (files: KifuFile[]) => void): (() => void) => {
     const listener = (_: unknown, files: KifuFile[]) => callback(files)
     ipcRenderer.on('kifu-file-opened', listener)

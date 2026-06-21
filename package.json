@@ -12,7 +12,8 @@
     "rebuild": "electron-rebuild"
   },
   "dependencies": {
-    "better-sqlite3": "^12.11.1"
+    "better-sqlite3": "^12.11.1",
+    "iconv-lite": "^0.7.2"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",

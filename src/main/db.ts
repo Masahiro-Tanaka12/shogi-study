@@ -17,6 +17,15 @@ const SCHEMA = `
     next_move   TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_positions_sfen ON positions(sfen);
+  CREATE TABLE IF NOT EXISTS tags (
+    id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE
+  );
+  CREATE TABLE IF NOT EXISTS kifu_tags (
+    kifu_id INTEGER NOT NULL REFERENCES kifus(id) ON DELETE CASCADE,
+    tag_id  INTEGER NOT NULL REFERENCES tags(id)  ON DELETE CASCADE,
+    PRIMARY KEY (kifu_id, tag_id)
+  );
 `
 
 export type Db = Database.Database
@@ -37,7 +46,16 @@ export function insertKifuIfNew(
   fileName: string
 ): { id: number; isNew: boolean } {
   const existing = db.prepare('SELECT id FROM kifus WHERE file_path = ?').get(filePath) as { id: number } | undefined
-  if (existing) return { id: existing.id, isNew: false }
+  if (existing) {
+    const { n } = db.prepare(
+      'SELECT COUNT(*) as n FROM positions WHERE kifu_id = ? AND next_move IS NOT NULL'
+    ).get(existing.id) as { n: number }
+    if (n > 0) return { id: existing.id, isNew: false }
+    // 指し手なし = 文字化けによる壊れた取込み → positions を削除して再取込みを許可（タグは保持）
+    db.prepare('DELETE FROM positions WHERE kifu_id = ?').run(existing.id)
+    console.log(`[db] re-import: ${filePath} (corrupted positions cleared)`)
+    return { id: existing.id, isNew: true }
+  }
 
   const result = db.prepare('INSERT INTO kifus (file_path, file_name) VALUES (?, ?)').run(filePath, fileName)
   return { id: result.lastInsertRowid as number, isNew: true }
@@ -61,8 +79,65 @@ export function insertPositions(db: Db, kifuId: number, entries: PositionEntry[]
 }
 
 export function getAllKifus(db: Db): KifuFile[] {
-  const rows = db
-    .prepare('SELECT file_path, file_name FROM kifus ORDER BY created_at DESC')
-    .all() as { file_path: string; file_name: string }[]
-  return rows.map(r => ({ path: r.file_path, fileName: r.file_name, tags: [] }))
+  const rows = db.prepare(`
+    SELECT k.file_path, k.file_name,
+           GROUP_CONCAT(t.name) AS tag_names
+    FROM kifus k
+    LEFT JOIN kifu_tags kt ON kt.kifu_id = k.id
+    LEFT JOIN tags t       ON t.id = kt.tag_id
+    GROUP BY k.id
+    ORDER BY k.created_at DESC
+  `).all() as { file_path: string; file_name: string; tag_names: string | null }[]
+
+  return rows.map(r => ({
+    path: r.file_path,
+    fileName: r.file_name,
+    tags: r.tag_names ? r.tag_names.split(',') : [],
+  }))
+}
+
+export function addTag(db: Db, kifuPath: string, tagName: string): void {
+  const kifu = db.prepare('SELECT id FROM kifus WHERE file_path = ?').get(kifuPath) as { id: number } | undefined
+  if (!kifu) return
+
+  db.prepare('INSERT OR IGNORE INTO tags (name) VALUES (?)').run(tagName)
+  const tag = db.prepare('SELECT id FROM tags WHERE name = ?').get(tagName) as { id: number }
+  db.prepare('INSERT OR IGNORE INTO kifu_tags (kifu_id, tag_id) VALUES (?, ?)').run(kifu.id, tag.id)
+}
+
+export function removeTag(db: Db, kifuPath: string, tagName: string): void {
+  const kifu = db.prepare('SELECT id FROM kifus WHERE file_path = ?').get(kifuPath) as { id: number } | undefined
+  if (!kifu) return
+
+  const tag = db.prepare('SELECT id FROM tags WHERE name = ?').get(tagName) as { id: number } | undefined
+  if (!tag) return
+
+  db.prepare('DELETE FROM kifu_tags WHERE kifu_id = ? AND tag_id = ?').run(kifu.id, tag.id)
+}
+
+export interface MoveCount {
+  move: string
+  count: number
+}
+
+export function getPositionStats(db: Db, sfen: string, tagQuery?: string): MoveCount[] {
+  if (tagQuery) {
+    return db.prepare(`
+      SELECT p.next_move AS move, COUNT(*) AS count
+      FROM positions p
+      JOIN kifu_tags kt ON kt.kifu_id = p.kifu_id
+      JOIN tags t       ON t.id = kt.tag_id
+      WHERE p.sfen = ? AND p.next_move IS NOT NULL AND t.name LIKE ?
+      GROUP BY p.next_move
+      ORDER BY count DESC
+    `).all(sfen, `%${tagQuery}%`) as MoveCount[]
+  }
+
+  return db.prepare(`
+    SELECT next_move AS move, COUNT(*) AS count
+    FROM positions
+    WHERE sfen = ? AND next_move IS NOT NULL
+    GROUP BY next_move
+    ORDER BY count DESC
+  `).all(sfen) as MoveCount[]
 }
