@@ -4,9 +4,12 @@ import { readFile } from 'fs/promises'
 import { parseKif } from '../shared/kifu'
 import { buildBoardState, boardToSfen, debugBoard, enumeratePositions, createInitialBoard } from '../shared/board'
 import { aggregatePositions, logPositionStats, type PositionStats } from '../shared/stats'
+import { initDb, insertKifuIfNew, insertPositions, getAllKifus, type Db } from './db'
 
 const allStats: PositionStats = {}
 const INITIAL_SFEN = boardToSfen(createInitialBoard())
+
+let db: Db
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -34,7 +37,14 @@ ipcMain.handle('select-kifu-file', async () => {
   return filePaths[0] ?? null
 })
 
+ipcMain.handle('get-kifu-list', () => {
+  return getAllKifus(db)
+})
+
 app.whenReady().then(() => {
+  db = initDb(join(app.getPath('userData'), 'shogi-study.db'))
+  console.log('[db] opened:', join(app.getPath('userData'), 'shogi-study.db'))
+
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
       {
@@ -63,6 +73,15 @@ app.whenReady().then(() => {
 
               const positions = enumeratePositions(moves)
               console.log(`[positions] ${positions.length} 局面 (expected: ${moves.length + 1})`)
+
+              const { id: kifuId, isNew } = insertKifuIfNew(db, p, basename(p))
+              if (isNew) {
+                insertPositions(db, kifuId, positions)
+                console.log(`[db] saved: ${basename(p)} (id=${kifuId})`)
+              } else {
+                console.log(`[db] skip: ${basename(p)} already exists (id=${kifuId})`)
+              }
+
               aggregatePositions(positions, allStats)
             }
 

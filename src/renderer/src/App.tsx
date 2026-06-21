@@ -5,6 +5,7 @@ declare global {
   interface Window {
     api: {
       selectKifuFile: () => Promise<string | null>
+      getKifuList: () => Promise<KifuFile[]>
       onKifuFileOpened: (callback: (files: KifuFile[]) => void) => () => void
     }
   }
@@ -45,6 +46,8 @@ function App(): JSX.Element {
   const [kifuList, setKifuList] = useState<KifuFile[]>([])
 
   useEffect(() => {
+    window.api.getKifuList().then(files => setKifuList(files))
+
     const cleanup = window.api.onKifuFileOpened(files => {
       setKifuList(prev => {
         const existingPaths = new Set(prev.map(f => f.path))
