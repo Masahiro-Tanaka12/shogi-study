@@ -5,7 +5,7 @@ import iconv from 'iconv-lite'
 import { parseKif } from '../shared/kifu'
 import { buildBoardState, boardToSfen, debugBoard, enumeratePositions, createInitialBoard } from '../shared/board'
 import { aggregatePositions, logPositionStats, type PositionStats } from '../shared/stats'
-import { initDb, insertKifuIfNew, insertPositions, getAllKifus, addTag, removeTag, getPositionStats, type Db } from './db'
+import { initDb, insertKifuIfNew, insertPositions, getAllKifus, addTag, removeTag, getPositionStats, getNextSfen, type Db } from './db'
 
 const allStats: PositionStats = {}
 const INITIAL_SFEN = boardToSfen(createInitialBoard())
@@ -71,6 +71,10 @@ ipcMain.handle('add-tag', (_event, kifuPath: string, tagName: string) => {
 
 ipcMain.handle('remove-tag', (_event, kifuPath: string, tagName: string) => {
   removeTag(db, kifuPath, tagName)
+})
+
+ipcMain.handle('apply-move-string', (_event, sfen: string, move: string) => {
+  return getNextSfen(db, sfen, move)
 })
 
 ipcMain.handle('get-position-stats', (_event, sfen: string, tagQuery: string) => {

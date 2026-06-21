@@ -120,6 +120,17 @@ export interface MoveCount {
   count: number
 }
 
+export function getNextSfen(db: Db, sfen: string, move: string): string | null {
+  const row = db.prepare(`
+    SELECT p2.sfen
+    FROM positions p1
+    JOIN positions p2 ON p2.kifu_id = p1.kifu_id AND p2.move_number = p1.move_number + 1
+    WHERE p1.sfen = ? AND p1.next_move = ?
+    LIMIT 1
+  `).get(sfen, move) as { sfen: string } | undefined
+  return row?.sfen ?? null
+}
+
 export function getPositionStats(db: Db, sfen: string, tagQuery?: string): MoveCount[] {
   if (tagQuery) {
     return db.prepare(`

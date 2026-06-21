@@ -10,6 +10,7 @@ declare global {
       getKifuList: () => Promise<KifuFile[]>
       addTag: (kifuPath: string, tagName: string) => Promise<void>
       removeTag: (kifuPath: string, tagName: string) => Promise<void>
+      applyMoveString: (sfen: string, move: string) => Promise<string | null>
       getPositionStats: (sfen: string, tagQuery: string) => Promise<MoveCount[]>
       onKifuFileOpened: (callback: (files: KifuFile[]) => void) => () => void
     }
@@ -209,7 +210,7 @@ function KifuListItem({ kifu, onTagAdd, onTagRemove }: KifuListItemProps): JSX.E
 
 // ---- StatsPanel ----
 
-function StatsPanel({ stats, prefix }: { stats: MoveCount[]; prefix: string }): JSX.Element {
+function StatsPanel({ stats, prefix, onMoveClick }: { stats: MoveCount[]; prefix: string; onMoveClick: (move: string) => void }): JSX.Element {
   const total = stats.reduce((s, r) => s + r.count, 0)
   return (
     <div>
@@ -219,7 +220,13 @@ function StatsPanel({ stats, prefix }: { stats: MoveCount[]; prefix: string }): 
           const pct = ((count / total) * 100).toFixed(1)
           const barWidth = Math.round((count / total) * 100)
           return (
-            <li key={move} style={{ marginBottom: '6px' }}>
+            <li
+              key={move}
+              onClick={() => onMoveClick(move)}
+              style={{ marginBottom: '6px', cursor: 'pointer', padding: '3px 4px', borderRadius: '4px' }}
+              onMouseEnter={e => (e.currentTarget.style.background = '#f0f4ff')}
+              onMouseLeave={e => (e.currentTarget.style.background = '')}
+            >
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#222' }}>
                 <span>{prefix}{move}</span>
                 <span style={{ color: '#555' }}>{count}回 ({pct}%)</span>
@@ -244,7 +251,8 @@ function sidePrefix(sfen: string): string {
 function App(): JSX.Element {
   const [kifuList, setKifuList] = useState<KifuFile[]>([])
   const [tagQuery, setTagQuery] = useState('')
-  const [currentSfen] = useState(INITIAL_SFEN)
+  const [currentSfen, setCurrentSfen] = useState(INITIAL_SFEN)
+  const [sfenHistory, setSfenHistory] = useState<string[]>([])
   const [stats, setStats] = useState<MoveCount[]>([])
 
   useEffect(() => {
@@ -263,6 +271,28 @@ function App(): JSX.Element {
   useEffect(() => {
     window.api.getPositionStats(currentSfen, tagQuery).then(setStats)
   }, [currentSfen, tagQuery])
+
+  async function handleMoveClick(move: string): Promise<void> {
+    const nextSfen = await window.api.applyMoveString(currentSfen, move)
+    if (!nextSfen) return
+    setSfenHistory(h => [...h, currentSfen])
+    setCurrentSfen(nextSfen)
+  }
+
+  function handleBack(): void {
+    setSfenHistory(h => {
+      if (h.length === 0) return h
+      const prev = [...h]
+      const sfen = prev.pop()!
+      setCurrentSfen(sfen)
+      return prev
+    })
+  }
+
+  function handleReset(): void {
+    setSfenHistory([])
+    setCurrentSfen(INITIAL_SFEN)
+  }
 
   function handleTagAdd(kifuPath: string, tagName: string): void {
     window.api.addTag(kifuPath, tagName)
@@ -293,8 +323,35 @@ function App(): JSX.Element {
 
   return (
     <div style={{ display: 'flex', height: '100vh', fontFamily: "'Hiragino Kaku Gothic ProN', 'Yu Gothic', sans-serif", overflow: 'hidden' }}>
-      <div style={{ flex: '1 1 auto', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f5f0e8' }}>
+      <div style={{ flex: '1 1 auto', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#f5f0e8', gap: '12px' }}>
         <ShogiBoard sfen={currentSfen} />
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button
+            onClick={handleBack}
+            disabled={sfenHistory.length === 0}
+            style={{
+              padding: '5px 14px', fontSize: '12px', cursor: sfenHistory.length === 0 ? 'default' : 'pointer',
+              border: '1px solid #aaa', borderRadius: '4px',
+              background: sfenHistory.length === 0 ? '#f0f0f0' : '#fff',
+              color: sfenHistory.length === 0 ? '#aaa' : '#333',
+            }}
+          >
+            ◀ 1手戻る
+          </button>
+          <button
+            onClick={handleReset}
+            disabled={sfenHistory.length === 0 && currentSfen === INITIAL_SFEN}
+            style={{
+              padding: '5px 14px', fontSize: '12px',
+              cursor: (sfenHistory.length === 0 && currentSfen === INITIAL_SFEN) ? 'default' : 'pointer',
+              border: '1px solid #aaa', borderRadius: '4px',
+              background: (sfenHistory.length === 0 && currentSfen === INITIAL_SFEN) ? '#f0f0f0' : '#fff',
+              color: (sfenHistory.length === 0 && currentSfen === INITIAL_SFEN) ? '#aaa' : '#333',
+            }}
+          >
+            初期局面
+          </button>
+        </div>
       </div>
       <div style={{ width: '300px', flexShrink: 0, display: 'flex', flexDirection: 'column', borderLeft: '1px solid #ccc', background: '#fff' }}>
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', borderBottom: '1px solid #ccc', overflow: 'hidden' }}>
@@ -342,7 +399,7 @@ function App(): JSX.Element {
           {stats.length === 0 ? (
             <p style={{ fontSize: '13px', color: '#999', margin: 0 }}>データがありません</p>
           ) : (
-            <StatsPanel stats={stats} prefix={sidePrefix(currentSfen)} />
+            <StatsPanel stats={stats} prefix={sidePrefix(currentSfen)} onMoveClick={handleMoveClick} />
           )}
         </div>
       </div>
