@@ -10,11 +10,112 @@ declare global {
       getKifuList: () => Promise<KifuFile[]>
       addTag: (kifuPath: string, tagName: string) => Promise<void>
       removeTag: (kifuPath: string, tagName: string) => Promise<void>
+      savePastedKif: (text: string, suggestedName: string) => Promise<KifuFile[] | null>
       applyMoveString: (sfen: string, move: string) => Promise<string | null>
       getPositionStats: (sfen: string, tagQuery: string) => Promise<MoveCount[]>
       onKifuFileOpened: (callback: (files: KifuFile[]) => void) => () => void
     }
   }
+}
+
+function suggestFileName(text: string): string {
+  const sente = text.match(/^先手[：:]\s*(.+)$/m)?.[1]?.trim()
+  const gote  = text.match(/^後手[：:]\s*(.+)$/m)?.[1]?.trim()
+  if (sente && gote) return `${sente}vs${gote}.kif`
+  const date = text.match(/^開始日時[：:]\s*(\d{4})[\/-](\d{2})[\/-](\d{2})/m)
+  if (date) return `${date[1]}${date[2]}${date[3]}.kif`
+  return `kifu_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.kif`
+}
+
+function PasteKifModal({ onClose, onSaved }: { onClose: () => void; onSaved: (files: KifuFile[]) => void }): JSX.Element {
+  const [text, setText] = useState('')
+  const [fileName, setFileName] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  function handleTextChange(e: React.ChangeEvent<HTMLTextAreaElement>): void {
+    const v = e.target.value
+    setText(v)
+    if (!fileName || fileName === suggestFileName(text)) {
+      setFileName(suggestFileName(v))
+    }
+  }
+
+  async function handleSave(): Promise<void> {
+    if (!text.trim()) return
+    setSaving(true)
+    try {
+      const result = await window.api.savePastedKif(text, fileName || suggestFileName(text))
+      if (result) onSaved(result)
+    } finally {
+      setSaving(false)
+      onClose()
+    }
+  }
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: '#fff', borderRadius: '8px', padding: '24px',
+          width: '480px', boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
+          display: 'flex', flexDirection: 'column', gap: '12px',
+        }}
+      >
+        <h3 style={{ margin: 0, fontSize: '15px', color: '#222' }}>KIFテキストから追加</h3>
+
+        <textarea
+          autoFocus
+          value={text}
+          onChange={handleTextChange}
+          placeholder="KIFテキストをここに貼り付けてください…"
+          style={{
+            width: '100%', boxSizing: 'border-box', height: '220px',
+            fontFamily: 'monospace', fontSize: '12px',
+            border: '1px solid #ccc', borderRadius: '4px',
+            padding: '8px', resize: 'vertical', outline: 'none',
+          }}
+        />
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <label style={{ fontSize: '12px', color: '#555', whiteSpace: 'nowrap' }}>ファイル名:</label>
+          <input
+            value={fileName}
+            onChange={e => setFileName(e.target.value)}
+            style={{
+              flex: 1, fontSize: '12px', padding: '4px 8px',
+              border: '1px solid #ccc', borderRadius: '4px', outline: 'none',
+            }}
+          />
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+          <button
+            onClick={onClose}
+            style={{ padding: '6px 16px', fontSize: '12px', border: '1px solid #ccc', borderRadius: '4px', cursor: 'pointer', background: '#fff' }}
+          >
+            キャンセル
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={!text.trim() || saving}
+            style={{
+              padding: '6px 16px', fontSize: '12px', border: 'none', borderRadius: '4px', cursor: text.trim() && !saving ? 'pointer' : 'default',
+              background: text.trim() && !saving ? '#2a5bd7' : '#9ab0ec', color: '#fff',
+            }}
+          >
+            {saving ? '保存中…' : '保存'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 const COLS = ['9', '8', '7', '6', '5', '4', '3', '2', '1']
@@ -251,6 +352,7 @@ function sidePrefix(sfen: string): string {
 function App(): JSX.Element {
   const [kifuList, setKifuList] = useState<KifuFile[]>([])
   const [tagQuery, setTagQuery] = useState('')
+  const [showPasteModal, setShowPasteModal] = useState(false)
   const [currentSfen, setCurrentSfen] = useState(INITIAL_SFEN)
   const [sfenHistory, setSfenHistory] = useState<string[]>([])
   const [stats, setStats] = useState<MoveCount[]>([])
@@ -323,6 +425,12 @@ function App(): JSX.Element {
 
   return (
     <div style={{ display: 'flex', height: '100vh', fontFamily: "'Hiragino Kaku Gothic ProN', 'Yu Gothic', sans-serif", overflow: 'hidden' }}>
+      {showPasteModal && (
+        <PasteKifModal
+          onClose={() => setShowPasteModal(false)}
+          onSaved={files => setKifuList(files)}
+        />
+      )}
       <div style={{ flex: '1 1 auto', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#f5f0e8', gap: '12px' }}>
         <ShogiBoard sfen={currentSfen} />
         <div style={{ display: 'flex', gap: '8px' }}>
@@ -356,7 +464,20 @@ function App(): JSX.Element {
       <div style={{ width: '300px', flexShrink: 0, display: 'flex', flexDirection: 'column', borderLeft: '1px solid #ccc', background: '#fff' }}>
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', borderBottom: '1px solid #ccc', overflow: 'hidden' }}>
           <div style={{ padding: '12px 16px 8px' }}>
-            <h3 style={{ margin: '0 0 8px', fontSize: '14px', color: '#333' }}>棋譜リスト</h3>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <h3 style={{ margin: 0, fontSize: '14px', color: '#333' }}>棋譜リスト</h3>
+              <button
+                onClick={() => setShowPasteModal(true)}
+                title="KIFテキストを貼り付けて追加"
+                style={{
+                  fontSize: '11px', padding: '3px 8px',
+                  border: '1px solid #ccc', borderRadius: '4px',
+                  cursor: 'pointer', background: '#fff', color: '#555',
+                }}
+              >
+                + テキストから追加
+              </button>
+            </div>
             <input
               value={tagQuery}
               onChange={e => setTagQuery(e.target.value)}

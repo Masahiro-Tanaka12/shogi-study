@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
 import { join, basename } from 'path'
-import { readFile } from 'fs/promises'
+import { readFile, writeFile } from 'fs/promises'
 import iconv from 'iconv-lite'
 import { parseKif } from '../shared/kifu'
 import { buildBoardState, boardToSfen, debugBoard, enumeratePositions, createInitialBoard } from '../shared/board'
@@ -71,6 +71,19 @@ ipcMain.handle('add-tag', (_event, kifuPath: string, tagName: string) => {
 
 ipcMain.handle('remove-tag', (_event, kifuPath: string, tagName: string) => {
   removeTag(db, kifuPath, tagName)
+})
+
+ipcMain.handle('save-pasted-kif', async (_event, text: string, suggestedName: string) => {
+  const win = BrowserWindow.getFocusedWindow()
+  const { filePath, canceled } = await dialog.showSaveDialog(win ?? new BrowserWindow(), {
+    defaultPath: suggestedName,
+    filters: [{ name: 'KIF ファイル', extensions: ['kif'] }],
+  })
+  if (canceled || !filePath) return null
+
+  await writeFile(filePath, text, 'utf-8')
+  await processKifFile(filePath)
+  return getAllKifus(db)
 })
 
 ipcMain.handle('apply-move-string', (_event, sfen: string, move: string) => {
