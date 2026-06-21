@@ -7,7 +7,7 @@ import { parseKi2 } from '../shared/ki2'
 import { parseCsa } from '../shared/csa'
 import { buildBoardState, boardToSfen, debugBoard, enumeratePositions, createInitialBoard } from '../shared/board'
 import { aggregatePositions, logPositionStats, type PositionStats } from '../shared/stats'
-import { initDb, insertKifuIfNew, insertPositions, getAllKifus, addTag, removeTag, getPositionStats, getNextSfen, type Db } from './db'
+import { initDb, insertKifuIfNew, insertPositions, getAllKifus, addTag, removeTag, deleteKifu, getPositionStats, getNextSfen, type Db } from './db'
 
 const allStats: PositionStats = {}
 const INITIAL_SFEN = boardToSfen(createInitialBoard())
@@ -88,6 +88,11 @@ ipcMain.handle('save-pasted-kif', async (_event, text: string, suggestedName: st
 
   await writeFile(filePath, text, 'utf-8')
   await processKifFile(filePath)
+  return getAllKifus(db)
+})
+
+ipcMain.handle('delete-kifu', (_event, kifuPath: string) => {
+  deleteKifu(db, kifuPath)
   return getAllKifus(db)
 })
 

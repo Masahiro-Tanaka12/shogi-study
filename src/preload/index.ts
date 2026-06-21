@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('api', {
   removeTag: (kifuPath: string, tagName: string): Promise<void> => ipcRenderer.invoke('remove-tag', kifuPath, tagName),
   savePastedKif: (text: string, suggestedName: string): Promise<KifuFile[] | null> =>
     ipcRenderer.invoke('save-pasted-kif', text, suggestedName),
+  deleteKifu: (kifuPath: string): Promise<KifuFile[]> =>
+    ipcRenderer.invoke('delete-kifu', kifuPath),
   applyMoveString: (sfen: string, move: string): Promise<string | null> =>
     ipcRenderer.invoke('apply-move-string', sfen, move),
   getPositionStats: (sfen: string, tagQuery: string): Promise<{ move: string; count: number }[]> =>

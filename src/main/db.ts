@@ -105,6 +105,10 @@ export function addTag(db: Db, kifuPath: string, tagName: string): void {
   db.prepare('INSERT OR IGNORE INTO kifu_tags (kifu_id, tag_id) VALUES (?, ?)').run(kifu.id, tag.id)
 }
 
+export function deleteKifu(db: Db, kifuPath: string): void {
+  db.prepare('DELETE FROM kifus WHERE file_path = ?').run(kifuPath)
+}
+
 export function removeTag(db: Db, kifuPath: string, tagName: string): void {
   const kifu = db.prepare('SELECT id FROM kifus WHERE file_path = ?').get(kifuPath) as { id: number } | undefined
   if (!kifu) return

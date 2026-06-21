@@ -15,6 +15,7 @@ declare global {
       addTag: (kifuPath: string, tagName: string) => Promise<void>
       removeTag: (kifuPath: string, tagName: string) => Promise<void>
       savePastedKif: (text: string, suggestedName: string) => Promise<KifuFile[] | null>
+      deleteKifu: (kifuPath: string) => Promise<KifuFile[]>
       applyMoveString: (sfen: string, move: string) => Promise<string | null>
       getPositionStats: (sfen: string, tagQuery: string) => Promise<MoveCount[]>
       onKifuFileOpened: (callback: (files: KifuFile[]) => void) => () => void
@@ -456,10 +457,13 @@ interface KifuListItemProps {
   kifu: KifuFile
   onTagAdd: (tagName: string) => void
   onTagRemove: (tagName: string) => void
+  onDelete: () => void
 }
 
-function KifuListItem({ kifu, onTagAdd, onTagRemove }: KifuListItemProps): JSX.Element {
+function KifuListItem({ kifu, onTagAdd, onTagRemove, onDelete }: KifuListItemProps): JSX.Element {
   const [input, setInput] = useState('')
+  const [hovered, setHovered] = useState(false)
+  const [confirming, setConfirming] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>): void {
@@ -474,11 +478,51 @@ function KifuListItem({ kifu, onTagAdd, onTagRemove }: KifuListItemProps): JSX.E
   return (
     <li
       onDoubleClick={() => console.log(kifu.fileName)}
-      style={{ padding: '8px', borderRadius: '4px', cursor: 'default' }}
-      onMouseEnter={e => (e.currentTarget.style.background = '#f5f5f5')}
-      onMouseLeave={e => (e.currentTarget.style.background = '')}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => { setHovered(false); setConfirming(false) }}
+      style={{ padding: '8px', borderRadius: '4px', cursor: 'default', background: hovered ? '#f5f5f5' : '' }}
     >
-      <div style={{ fontSize: '13px', color: '#333', marginBottom: '4px' }}>{kifu.fileName}</div>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '4px' }}>
+        <div style={{ fontSize: '13px', color: '#333', flex: 1, minWidth: 0, wordBreak: 'break-all' }}>
+          {kifu.fileName}
+        </div>
+        {hovered && !confirming && (
+          <button
+            onClick={e => { e.stopPropagation(); setConfirming(true) }}
+            title="棋譜を削除"
+            style={{
+              marginLeft: '6px', flexShrink: 0, padding: '1px 6px', fontSize: '11px',
+              border: '1px solid #e88', borderRadius: '4px', cursor: 'pointer',
+              background: '#fff', color: '#c33',
+            }}
+          >
+            削除
+          </button>
+        )}
+        {confirming && (
+          <div style={{ display: 'flex', gap: '4px', marginLeft: '6px', flexShrink: 0 }}>
+            <button
+              onClick={e => { e.stopPropagation(); onDelete() }}
+              style={{
+                padding: '1px 8px', fontSize: '11px', border: 'none',
+                borderRadius: '4px', cursor: 'pointer', background: '#c33', color: '#fff',
+              }}
+            >
+              削除する
+            </button>
+            <button
+              onClick={e => { e.stopPropagation(); setConfirming(false) }}
+              style={{
+                padding: '1px 6px', fontSize: '11px',
+                border: '1px solid #ccc', borderRadius: '4px', cursor: 'pointer',
+                background: '#fff', color: '#555',
+              }}
+            >
+              キャンセル
+            </button>
+          </div>
+        )}
+      </div>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', alignItems: 'center' }}>
         {kifu.tags.map(tag => (
@@ -751,6 +795,11 @@ function App(): JSX.Element {
     )
   }
 
+  async function handleKifuDelete(kifuPath: string): Promise<void> {
+    const updated = await window.api.deleteKifu(kifuPath)
+    setKifuList(updated)
+  }
+
   const query = tagQuery.trim().replace(/^#+/, '')
   const filtered = query
     ? kifuList.filter(f => f.tags.some(t => t.includes(query)))
@@ -877,6 +926,7 @@ function App(): JSX.Element {
                       kifu={f}
                       onTagAdd={name => handleTagAdd(f.path, name)}
                       onTagRemove={name => handleTagRemove(f.path, name)}
+                      onDelete={() => handleKifuDelete(f.path)}
                     />
                   ))}
                 </ul>
