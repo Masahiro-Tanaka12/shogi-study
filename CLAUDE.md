@@ -1,125 +1,130 @@
 # CLAUDE.md
 
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 ## Project Overview
 
-将棋の棋譜を分析するデスクトップアプリ。
+将棋の棋譜を分析するデスクトップアプリ。目的は定跡データベースを作ること、自分で集めた棋譜を研究しやすくすること。
 
-目的は定跡データベースを作ること、
-自分で集めた棋譜を研究しやすくすること。
-
-このアプリはAI最善手を教えるアプリではない。
-
-## Product Philosophy
-
-このアプリの主役は棋譜ではなく局面である。
-
-棋譜は統計生成のための材料として扱う。
-
-ユーザーはタグによって棋譜集合を作成し、
-その集合に対して局面統計を表示する。
-
-最終目的は
-「この局面で何が指されているか」
-を調査することである。
-
-## Domain Model
-
-棋譜は個別の対局単位で管理する。
-
-戦型ごとのファイルは作成しない。
-
-例:
-- 藤井vs永瀬.kif
-- 羽生vs渡辺.kif
-
-戦型分類や研究用のグルーピングは
-tags によって行う。
-
-例:
-- #右玉
-- #角換わり
-- #対振り飛車
-
-統計解析はタグ検索で得られた棋譜集合を対象とする。
-
----
+**このアプリの主役は棋譜ではなく局面。**
+棋譜は統計生成のための材料。最終目的は「この局面で何が指されているか」を調査すること。
 
 ## Tech Stack
 
-* Electron
-* React
-* TypeScript
-* SQLite
+- Electron + React + TypeScript
+- SQLite（better-sqlite3）
+- iconv-lite（Shift_JIS 対応）
 
----
+## Commands
 
-## Current Phase
+```bash
+# 開発起動（VS Code から起動する場合は必ず環境変数を外す）
+unset ELECTRON_RUN_AS_NODE && npm run dev
 
-現在はMVP開発段階。
+# 型チェック
+npx tsc --noEmit
+```
 
-まずは以下だけ実装する。
+## Architecture
 
-1. KIFファイル読み込み
-2. 棋譜一覧表示
-3. タグ付け
-4. SFENによる局面集計
+```
+src/
+  main/
+    index.ts   # Electronメインプロセス。IPC ハンドラ、起動処理
+    db.ts      # SQLite 操作（better-sqlite3）
+  preload/
+    index.ts   # contextBridge で window.api を公開
+  renderer/src/
+    App.tsx    # React UI 全体（単一ファイル）
+  shared/
+    types.ts   # 共通型定義（KifuFile, Move, BoardState, PositionEntry）
+    kifu.ts    # KIF パーサー
+    ki2.ts     # KI2 パーサー
+    csa.ts     # CSA パーサー
+    board.ts   # 盤面状態・SFEN 変換・手の適用
+    moveGen.ts # 合法手生成（移動先ハイライト用）
+    stats.ts   # 局面統計の集計ロジック
+```
 
----
+### DB スキーマ（主要テーブル）
 
-## Not Yet
+```sql
+kifus      (id, file_path UNIQUE, file_name, created_at)
+positions  (id, kifu_id, sfen, move_number, next_move)
+kifu_moves (id, kifu_id, move_number, from_file, from_rank, to_file, to_rank, piece, is_drop, is_promotion)
+tags       (id, name UNIQUE)
+kifu_tags  (kifu_id, tag_id)
+```
 
-以下は実装しない。
+`positions.next_move` は moveLabel() で生成した文字列（例: `７六歩`）。
+`getPositionStats` は `sfen` で検索し、タグ絞り込みがあれば JOIN して集計する。
 
-* KI2対応
-* CSA対応
-* ShogiGUI拡張KIF対応
-* AI解析
-* クラウド同期
-* アカウント機能
-* 定跡ツリー
-* グラフ描画
-* スマホ対応
+### IPC チャンネル一覧
 
-必要になってから検討する。
+| チャンネル | 処理 |
+|---|---|
+| `select-kifu-file` | ファイルダイアログを開き、パスを返す |
+| `get-kifu-list` | 全棋譜を返す（`exists: boolean` 付き） |
+| `add-tag` / `remove-tag` | タグ操作 |
+| `save-pasted-kif` | テキストを .kif として保存 → 取り込み |
+| `delete-kifu` | 棋譜を DB から削除 |
+| `update-kifu-path` | パス変更 → 再取り込み（ファイル再指定） |
+| `reimport-kifu` | 既存棋譜の positions を再構築 |
+| `apply-move-string` | 手文字列 → 次の SFEN（DB lookup） |
+| `get-position-stats` | SFEN + タグで次の手一覧を集計 |
 
----
+## 実装済み機能
 
-## Development Rules
+### 棋譜管理
+- KIF / KI2 / CSA ファイルの読み込み（複数選択対応）
+- KIFテキストのペースト取り込み（ファイル名自動推測）
+- 棋譜の削除・再読み込み
+- ファイル再指定（`exists=false` の棋譜を正しいパスに再マッピング）
+- 起動時の自動再取り込み（positions が空の棋譜を自動修復）
+- Shift_JIS 自動判定（`iconv-lite` 導入済み）
 
-大規模な設計変更を行う前に提案すること。
+### タグ管理
+- タグの付与・削除（インライン入力 + サジェスト）
+- タグによる棋譜リスト絞り込み（部分一致）
 
-新しいライブラリを追加する場合は理由を説明すること。
+### 局面・統計
+- インタラクティブ将棋盤（駒クリックで移動先ハイライト、持ち駒打ち対応）
+- 成り確認ダイアログ・強制成り
+- 局面統計（手ごとの件数・割合・バーグラフ）
+- タグで統計を絞り込み
+- 盤上に統計矢印オーバーレイ（上位3手）
+- 統計パネルの手クリックで局面を進める（DB lookup）
+- 手動で駒を動かして局面を進める（リアルタイム SFEN 計算）
+- 1手戻る / 初期局面リセット
 
-実装はシンプルさを優先すること。
+## 今後の予定機能
 
-過度な抽象化は避けること。
-
-まず動くものを作ること。
-
----
-
-## Product Philosophy
-
-ユーザーは将棋研究者である。
-
-自分の棋譜や収集した棋譜を分類し、
-局面ごとの傾向を調べられることを重視する。
-
-統計は評価値より優先される。
-
-MVPでは「便利な棋譜管理ツール」を目指す。
+1. **棋譜を1局選択して手順を再生**（←→ キーで手順を進める）
+2. **フォルダごと一括取り込み**
+3. **棋譜の検索・フィルタ**（先手名・後手名・日付）
+4. **複数タグの AND/OR 絞り込み**
+5. **局面から棋譜リストへのリンク**（この局面が含まれる棋譜一覧）
+6. **一括タグ付け**（複数棋譜に同じタグ）
 
 ## Development Notes
 
-VS Code上で Claude Code を利用する場合、
-ELECTRON_RUN_AS_NODE=1 が引き継がれることがある。
+### VS Code + Claude Code の注意
 
-Electron起動時に問題が発生した場合は、
-まずこの環境変数を確認すること。
+`ELECTRON_RUN_AS_NODE=1` が環境変数に残っていると Electron が起動しない。
+起動前に `unset ELECTRON_RUN_AS_NODE` を実行すること。
 
-### KIF文字コード
+### reimport-kifu の設計
 
-現在の KIF パーサー（src/shared/kifu.ts）は UTF-8 のみ対応。
+Phase 1（パース）と Phase 2（DB 書き込み）を分離。
+`validCount === 0` のときは DB を一切変更しない。
+これによりパース失敗時のデータ破壊を防いでいる。
 
-多くの古い KIF ファイルは Shift-JIS で保存されている。
-Shift-JIS 対応が必要になったら `iconv-lite` を導入すること。
+### KifuFile.exists
+
+`getAllKifus` が `existsSync` で毎回チェックして返す。
+`exists=false` の棋譜は UI で赤字表示 + 「再指定」ボタンを表示。
+
+### 実装しないもの
+
+AI解析・クラウド同期・アカウント機能・定跡ツリー・グラフ描画・スマホ対応。
+必要になってから検討する。

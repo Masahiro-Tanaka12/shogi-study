@@ -26,6 +26,7 @@ declare global {
       deleteKifu: (kifuPath: string) => Promise<KifuFile[]>
       updateKifuPath: (oldPath: string, newPath: string) => Promise<KifuFile[]>
       reimportKifu: (kifuPath: string) => Promise<KifuFile[]>
+      getKifuSfens: (kifuPath: string) => Promise<string[]>
       applyMoveString: (sfen: string, move: string) => Promise<string | null>
       getPositionStats: (sfen: string, tagQuery: string) => Promise<MoveCount[]>
       onKifuFileOpened: (callback: (files: KifuFile[]) => void) => () => void
@@ -544,15 +545,17 @@ function ShogiBoard({ sfen, boardW, selection, arrowMoves, onSquareClick, onHand
 
 interface KifuListItemProps {
   kifu: KifuFile
+  isReplaying: boolean
   allTags: { name: string; count: number }[]
   onTagAdd: (tagName: string) => void
   onTagRemove: (tagName: string) => void
   onDelete: () => void
   onReimport: () => Promise<void>
   onRelocate: () => Promise<void>
+  onReplay: () => Promise<void>
 }
 
-function KifuListItem({ kifu, allTags, onTagAdd, onTagRemove, onDelete, onReimport, onRelocate }: KifuListItemProps): JSX.Element {
+function KifuListItem({ kifu, isReplaying, allTags, onTagAdd, onTagRemove, onDelete, onReimport, onRelocate, onReplay }: KifuListItemProps): JSX.Element {
   const [input, setInput] = useState('')
   const [hovered, setHovered] = useState(false)
   const [confirming, setConfirming] = useState(false)
@@ -598,10 +601,10 @@ function KifuListItem({ kifu, allTags, onTagAdd, onTagRemove, onDelete, onReimpo
 
   return (
     <li
-      onDoubleClick={() => console.log(kifu.fileName)}
+      onDoubleClick={() => { if (kifu.exists) onReplay() }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => { setHovered(false); setConfirming(false) }}
-      style={{ padding: '8px', borderRadius: '4px', cursor: 'default', background: hovered ? '#f5f5f5' : '' }}
+      style={{ padding: '8px', borderRadius: '4px', cursor: 'default', background: isReplaying ? '#e8f0ff' : hovered ? '#f5f5f5' : '' }}
     >
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '4px' }}>
         <div style={{ fontSize: '13px', color: kifu.exists ? '#333' : '#c44', flex: 1, minWidth: 0, wordBreak: 'break-all' }}>
@@ -804,6 +807,9 @@ function App(): JSX.Element {
   const [selection, setSelection] = useState<BoardSelection>(null)
   const [promoteResolver, setPromoteResolver] = useState<((v: boolean) => void) | null>(null)
   const [showTagSearch, setShowTagSearch] = useState(false)
+  const [replayKifu, setReplayKifu] = useState<KifuFile | null>(null)
+  const [replaySfens, setReplaySfens] = useState<string[]>([])
+  const [replayIndex, setReplayIndex] = useState(0)
   const mainRef = useRef<HTMLDivElement>(null)
   const [boardW, setBoardW] = useState(486)
 
@@ -836,6 +842,27 @@ function App(): JSX.Element {
   useEffect(() => {
     window.api.getPositionStats(currentSfen, tagQuery).then(setStats)
   }, [currentSfen, tagQuery])
+
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent): void {
+      if (!replayKifu) return
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        setReplayIndex(i => {
+          const next = Math.min(i + 1, replaySfens.length - 1)
+          setCurrentSfen(replaySfens[next])
+          return next
+        })
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        setReplayIndex(i => {
+          const prev = Math.max(i - 1, 0)
+          setCurrentSfen(replaySfens[prev])
+          return prev
+        })
+      }
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [replayKifu, replaySfens])
 
   // 成り確認を Promise で待つ
   function askPromote(): Promise<boolean> {
@@ -877,6 +904,7 @@ function App(): JSX.Element {
 
   // 盤面セルのクリックハンドラ
   const handleSquareClick = useCallback(async (file: number, rank: number) => {
+    if (replayKifu) return
     const state = sfenToBoard(currentSfen)
     const player = state.sideToMove
 
@@ -943,10 +971,11 @@ function App(): JSX.Element {
       const dests = findToSquares(state.board, file, rank, player)
       setSelection({ kind: 'board', fromFile: file, fromRank: rank, validDests: dests })
     }
-  }, [currentSfen, selection, promoteResolver])
+  }, [currentSfen, selection, promoteResolver, replayKifu])
 
   // 持ち駒クリックハンドラ
   const handleHandClick = useCallback((pieceChar: string, isSente: boolean) => {
+    if (replayKifu) return
     const state = sfenToBoard(currentSfen)
     const player = state.sideToMove
     const clickedPlayer: Player = isSente ? 'sente' : 'gote'
@@ -965,7 +994,7 @@ function App(): JSX.Element {
 
     const dests = findDropSquares(state.board, jpPiece, hand, player)
     setSelection({ kind: 'hand', piece: jpPiece, validDests: dests })
-  }, [currentSfen, selection])
+  }, [currentSfen, selection, replayKifu])
 
   function handleTagAdd(kifuPath: string, tagName: string): void {
     window.api.addTag(kifuPath, tagName)
@@ -999,6 +1028,34 @@ function App(): JSX.Element {
     setKifuList(updated)
     const newStats = await window.api.getPositionStats(currentSfen, tagQuery)
     setStats(newStats)
+  }
+
+  async function handleKifuReplay(kifu: KifuFile): Promise<void> {
+    const sfens = await window.api.getKifuSfens(kifu.path)
+    if (sfens.length === 0) return
+    setReplayKifu(kifu)
+    setReplaySfens(sfens)
+    setReplayIndex(0)
+    setCurrentSfen(sfens[0])
+    setSfenHistory([])
+    setSelection(null)
+  }
+
+  function handleReplayStep(delta: number): void {
+    setReplayIndex(i => {
+      const next = Math.max(0, Math.min(i + delta, replaySfens.length - 1))
+      setCurrentSfen(replaySfens[next])
+      return next
+    })
+  }
+
+  function handleReplayEnd(): void {
+    setReplayKifu(null)
+    setReplaySfens([])
+    setReplayIndex(0)
+    setCurrentSfen(INITIAL_SFEN)
+    setSfenHistory([])
+    setSelection(null)
   }
 
   async function handleKifuRelocate(oldPath: string): Promise<void> {
@@ -1069,22 +1126,59 @@ function App(): JSX.Element {
                 onSquareClick={handleSquareClick}
                 onHandClick={handleHandClick}
               />
-              <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
-                <button
-                  onClick={handleBack}
-                  disabled={backDisabled}
-                  style={{ ...btnBase, cursor: backDisabled ? 'default' : 'pointer', background: backDisabled ? '#f0f0f0' : '#fff', color: backDisabled ? '#aaa' : '#333' }}
-                >
-                  ◀ 1手戻る
-                </button>
-                <button
-                  onClick={handleReset}
-                  disabled={resetDisabled}
-                  style={{ ...btnBase, cursor: resetDisabled ? 'default' : 'pointer', background: resetDisabled ? '#f0f0f0' : '#fff', color: resetDisabled ? '#aaa' : '#333' }}
-                >
-                  初期局面
-                </button>
-              </div>
+              {replayKifu ? (
+                // ── 再生コントロールバー ──
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '8px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                  <button
+                    onClick={() => handleReplayStep(-1)}
+                    disabled={replayIndex === 0}
+                    style={{ ...btnBase, cursor: replayIndex === 0 ? 'default' : 'pointer', background: replayIndex === 0 ? '#f0f0f0' : '#fff', color: replayIndex === 0 ? '#aaa' : '#333' }}
+                  >
+                    ◀ 前の手
+                  </button>
+                  <span style={{ fontSize: '12px', color: '#555', whiteSpace: 'nowrap' }}>
+                    {replayKifu.fileName}　{replayIndex}手目 / 全{replaySfens.length - 1}手
+                  </span>
+                  <button
+                    onClick={() => handleReplayStep(1)}
+                    disabled={replayIndex === replaySfens.length - 1}
+                    style={{ ...btnBase, cursor: replayIndex === replaySfens.length - 1 ? 'default' : 'pointer', background: replayIndex === replaySfens.length - 1 ? '#f0f0f0' : '#fff', color: replayIndex === replaySfens.length - 1 ? '#aaa' : '#333' }}
+                  >
+                    次の手 ▶
+                  </button>
+                  <button
+                    onClick={handleReplayEnd}
+                    style={{ ...btnBase, cursor: 'pointer', background: '#fff', color: '#c33', borderColor: '#e88' }}
+                  >
+                    × 終了
+                  </button>
+                </div>
+              ) : (
+                // ── 通常モードのボタン行 ──
+                <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
+                  <button
+                    onClick={handleBack}
+                    disabled={backDisabled}
+                    style={{ ...btnBase, cursor: backDisabled ? 'default' : 'pointer', background: backDisabled ? '#f0f0f0' : '#fff', color: backDisabled ? '#aaa' : '#333' }}
+                  >
+                    ◀ 1手戻る
+                  </button>
+                  <button
+                    onClick={handleReset}
+                    disabled={resetDisabled}
+                    style={{ ...btnBase, cursor: resetDisabled ? 'default' : 'pointer', background: resetDisabled ? '#f0f0f0' : '#fff', color: resetDisabled ? '#aaa' : '#333' }}
+                  >
+                    初期局面
+                  </button>
+                  <button
+                    onClick={() => { if (stats.length > 0) handleMoveClick(stats[0].move) }}
+                    disabled={stats.length === 0}
+                    style={{ ...btnBase, cursor: stats.length === 0 ? 'default' : 'pointer', background: stats.length === 0 ? '#f0f0f0' : '#fff', color: stats.length === 0 ? '#aaa' : '#333' }}
+                  >
+                    次の手（最多） ▶
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </Panel>
@@ -1185,12 +1279,14 @@ function App(): JSX.Element {
                     <KifuListItem
                       key={f.path}
                       kifu={f}
+                      isReplaying={replayKifu?.path === f.path}
                       allTags={allTags}
                       onTagAdd={name => handleTagAdd(f.path, name)}
                       onTagRemove={name => handleTagRemove(f.path, name)}
                       onDelete={() => handleKifuDelete(f.path)}
                       onReimport={() => handleKifuReimport(f.path)}
                       onRelocate={() => handleKifuRelocate(f.path)}
+                      onReplay={() => handleKifuReplay(f)}
                     />
                   ))}
                 </ul>

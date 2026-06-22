@@ -194,6 +194,17 @@ export function getNextSfen(db: Db, sfen: string, move: string): string | null {
   return row?.sfen ?? null
 }
 
+export function getKifuSfens(db: Db, kifuPath: string): string[] {
+  const kifu = db.prepare('SELECT id FROM kifus WHERE file_path = ?').get(kifuPath) as { id: number } | undefined
+  if (!kifu) return []
+  const rows = db.prepare(`
+    SELECT sfen FROM positions
+    WHERE kifu_id = ?
+    ORDER BY COALESCE(move_number, 99999)
+  `).all(kifu.id) as { sfen: string }[]
+  return rows.map(r => r.sfen)
+}
+
 export function getPositionStats(db: Db, sfen: string, tagQuery?: string): MoveCount[] {
   if (tagQuery) {
     return db.prepare(`
