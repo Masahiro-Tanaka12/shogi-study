@@ -15,7 +15,7 @@ import { parseKi2 } from '../shared/ki2'
 import { parseCsa } from '../shared/csa'
 import { buildBoardState, boardToSfen, debugBoard, enumeratePositions, createInitialBoard } from '../shared/board'
 import { aggregatePositions, logPositionStats, type PositionStats } from '../shared/stats'
-import { initDb, insertKifuIfNew, insertPositions, insertKifuMoves, getAllKifus, addTag, removeTag, deleteKifu, updateKifuPath, clearKifuPositions, getPositionStats, getNextSfen, getKifuSfens, type Db } from './db'
+import { initDb, insertKifuIfNew, insertPositions, insertKifuMoves, getAllKifus, addTag, removeTag, deleteKifu, updateKifuPath, clearKifuPositions, getPositionStats, getNextSfen, getKifuSfens, getKifuMoveLabels, type Db } from './db'
 
 const allStats: PositionStats = {}
 const INITIAL_SFEN = boardToSfen(createInitialBoard())
@@ -156,6 +156,10 @@ ipcMain.handle('apply-move-string', (_event, sfen: string, move: string) => {
 
 ipcMain.handle('get-kifu-sfens', (_event, kifuPath: string) => {
   return getKifuSfens(db, kifuPath)
+})
+
+ipcMain.handle('get-kifu-move-labels', (_event, kifuPath: string) => {
+  return getKifuMoveLabels(db, kifuPath)
 })
 
 ipcMain.handle('get-position-stats', (_event, sfen: string, tagQuery: string) => {

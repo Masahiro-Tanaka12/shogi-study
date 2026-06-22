@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('reimport-kifu', kifuPath),
   getKifuSfens: (kifuPath: string): Promise<string[]> =>
     ipcRenderer.invoke('get-kifu-sfens', kifuPath),
+  getKifuMoveLabels: (kifuPath: string): Promise<string[]> =>
+    ipcRenderer.invoke('get-kifu-move-labels', kifuPath),
   applyMoveString: (sfen: string, move: string): Promise<string | null> =>
     ipcRenderer.invoke('apply-move-string', sfen, move),
   getPositionStats: (sfen: string, tagQuery: string): Promise<{ move: string; count: number }[]> =>

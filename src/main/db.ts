@@ -205,6 +205,17 @@ export function getKifuSfens(db: Db, kifuPath: string): string[] {
   return rows.map(r => r.sfen)
 }
 
+export function getKifuMoveLabels(db: Db, kifuPath: string): string[] {
+  const kifu = db.prepare('SELECT id FROM kifus WHERE file_path = ?').get(kifuPath) as { id: number } | undefined
+  if (!kifu) return []
+  const rows = db.prepare(`
+    SELECT next_move FROM positions
+    WHERE kifu_id = ? AND next_move IS NOT NULL
+    ORDER BY COALESCE(move_number, 99999)
+  `).all(kifu.id) as { next_move: string }[]
+  return rows.map(r => r.next_move)
+}
+
 export function getPositionStats(db: Db, sfen: string, tagQuery?: string): MoveCount[] {
   if (tagQuery) {
     return db.prepare(`

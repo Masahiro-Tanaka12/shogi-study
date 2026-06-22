@@ -27,6 +27,7 @@ declare global {
       updateKifuPath: (oldPath: string, newPath: string) => Promise<KifuFile[]>
       reimportKifu: (kifuPath: string) => Promise<KifuFile[]>
       getKifuSfens: (kifuPath: string) => Promise<string[]>
+      getKifuMoveLabels: (kifuPath: string) => Promise<string[]>
       applyMoveString: (sfen: string, move: string) => Promise<string | null>
       getPositionStats: (sfen: string, tagQuery: string) => Promise<MoveCount[]>
       onKifuFileOpened: (callback: (files: KifuFile[]) => void) => () => void
@@ -604,7 +605,12 @@ function KifuListItem({ kifu, isReplaying, allTags, onTagAdd, onTagRemove, onDel
       onDoubleClick={() => { if (kifu.exists) onReplay() }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => { setHovered(false); setConfirming(false) }}
-      style={{ padding: '8px', borderRadius: '4px', cursor: 'default', background: isReplaying ? '#e8f0ff' : hovered ? '#f5f5f5' : '' }}
+      style={{
+        padding: '8px', borderRadius: '4px', cursor: 'default',
+        background: isReplaying ? '#e8f0ff' : hovered ? '#f5f5f5' : '',
+        outline: isReplaying ? '2px solid #d33' : 'none',
+        outlineOffset: '-1px',
+      }}
     >
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '4px' }}>
         <div style={{ fontSize: '13px', color: kifu.exists ? '#333' : '#c44', flex: 1, minWidth: 0, wordBreak: 'break-all' }}>
@@ -632,6 +638,17 @@ function KifuListItem({ kifu, isReplaying, allTags, onTagAdd, onTagRemove, onDel
         )}
         {kifu.exists && hovered && !confirming && (
           <div style={{ display: 'flex', gap: '4px', marginLeft: '6px', flexShrink: 0 }}>
+            <button
+              onClick={e => { e.stopPropagation(); onReplay() }}
+              title="棋譜を表示"
+              style={{
+                padding: '1px 6px', fontSize: '11px',
+                border: '1px solid #8a8', borderRadius: '4px',
+                cursor: 'pointer', background: '#f0fff0', color: '#363',
+              }}
+            >
+              表示
+            </button>
             <button
               onClick={handleReimport}
               disabled={reimporting}
@@ -789,6 +806,67 @@ function StatsPanel({ stats, prefix, onMoveClick }: { stats: MoveCount[]; prefix
   )
 }
 
+// ---- MoveListPanel ----
+
+interface MoveListPanelProps {
+  moves: string[]
+  sfens: string[]
+  currentIndex: number
+  onJump: (index: number) => void
+}
+
+function MoveListPanel({ moves, sfens, currentIndex, onJump }: MoveListPanelProps): JSX.Element {
+  const activeRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    activeRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [currentIndex])
+
+  const itemStyle = (active: boolean): React.CSSProperties => ({
+    padding: '3px 8px',
+    fontSize: '13px',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: '6px',
+    background: active ? '#e8f0ff' : '',
+    borderLeft: active ? '3px solid #2a5bd7' : '3px solid transparent',
+  })
+
+  return (
+    <div>
+      <div
+        ref={currentIndex === 0 ? activeRef : null}
+        onClick={() => onJump(0)}
+        style={itemStyle(currentIndex === 0)}
+        onMouseEnter={e => { if (currentIndex !== 0) e.currentTarget.style.background = '#f5f5f5' }}
+        onMouseLeave={e => { if (currentIndex !== 0) e.currentTarget.style.background = '' }}
+      >
+        <span style={{ fontSize: '11px', color: '#aaa', minWidth: '28px', textAlign: 'right' }}>0</span>
+        <span style={{ color: '#555' }}>開始局面</span>
+      </div>
+      {moves.map((move, i) => {
+        const idx = i + 1
+        const active = currentIndex === idx
+        const prefix = (sfens[i]?.split(' ')[1] === 'b') ? '▲' : '△'
+        return (
+          <div
+            key={idx}
+            ref={active ? activeRef : null}
+            onClick={() => onJump(idx)}
+            style={itemStyle(active)}
+            onMouseEnter={e => { if (!active) e.currentTarget.style.background = '#f5f5f5' }}
+            onMouseLeave={e => { if (!active) e.currentTarget.style.background = '' }}
+          >
+            <span style={{ fontSize: '11px', color: '#aaa', minWidth: '28px', textAlign: 'right' }}>{idx}</span>
+            <span>{prefix}{move}</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 // ---- App ----
 
 const INITIAL_SFEN = 'lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1'
@@ -809,6 +887,7 @@ function App(): JSX.Element {
   const [showTagSearch, setShowTagSearch] = useState(false)
   const [replayKifu, setReplayKifu] = useState<KifuFile | null>(null)
   const [replaySfens, setReplaySfens] = useState<string[]>([])
+  const [replayMoves, setReplayMoves] = useState<string[]>([])
   const [replayIndex, setReplayIndex] = useState(0)
   const mainRef = useRef<HTMLDivElement>(null)
   const [boardW, setBoardW] = useState(486)
@@ -1031,14 +1110,23 @@ function App(): JSX.Element {
   }
 
   async function handleKifuReplay(kifu: KifuFile): Promise<void> {
-    const sfens = await window.api.getKifuSfens(kifu.path)
+    const [sfens, moves] = await Promise.all([
+      window.api.getKifuSfens(kifu.path),
+      window.api.getKifuMoveLabels(kifu.path),
+    ])
     if (sfens.length === 0) return
     setReplayKifu(kifu)
     setReplaySfens(sfens)
+    setReplayMoves(moves)
     setReplayIndex(0)
     setCurrentSfen(sfens[0])
     setSfenHistory([])
     setSelection(null)
+  }
+
+  function handleReplayJump(index: number): void {
+    setReplayIndex(index)
+    setCurrentSfen(replaySfens[index])
   }
 
   function handleReplayStep(delta: number): void {
@@ -1052,6 +1140,7 @@ function App(): JSX.Element {
   function handleReplayEnd(): void {
     setReplayKifu(null)
     setReplaySfens([])
+    setReplayMoves([])
     setReplayIndex(0)
     setCurrentSfen(INITIAL_SFEN)
     setSfenHistory([])
@@ -1194,16 +1283,30 @@ function App(): JSX.Element {
             boxSizing: 'border-box',
             background: '#fafafa',
           }}>
-            <h3 style={{ margin: '0 0 4px', fontSize: '14px', color: '#333' }}>統計</h3>
-            {tagQuery.trim() && (
-              <p style={{ margin: '0 0 10px', fontSize: '11px', color: '#2a5bd7' }}>
-                絞り込み中: #{tagQuery.trim()}
-              </p>
-            )}
-            {stats.length === 0 ? (
-              <p style={{ fontSize: '13px', color: '#999', margin: 0 }}>データがありません</p>
+            {replayKifu ? (
+              <>
+                <h3 style={{ margin: '0 0 8px', fontSize: '14px', color: '#333' }}>手順</h3>
+                <MoveListPanel
+                  moves={replayMoves}
+                  sfens={replaySfens}
+                  currentIndex={replayIndex}
+                  onJump={handleReplayJump}
+                />
+              </>
             ) : (
-              <StatsPanel stats={stats} prefix={sidePrefix(currentSfen)} onMoveClick={handleMoveClick} />
+              <>
+                <h3 style={{ margin: '0 0 4px', fontSize: '14px', color: '#333' }}>統計</h3>
+                {tagQuery.trim() && (
+                  <p style={{ margin: '0 0 10px', fontSize: '11px', color: '#2a5bd7' }}>
+                    絞り込み中: #{tagQuery.trim()}
+                  </p>
+                )}
+                {stats.length === 0 ? (
+                  <p style={{ fontSize: '13px', color: '#999', margin: 0 }}>データがありません</p>
+                ) : (
+                  <StatsPanel stats={stats} prefix={sidePrefix(currentSfen)} onMoveClick={handleMoveClick} />
+                )}
+              </>
             )}
           </div>
         </Panel>
