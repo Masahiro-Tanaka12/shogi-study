@@ -656,6 +656,7 @@ function App(): JSX.Element {
   const [stats, setStats] = useState<MoveCount[]>([])
   const [selection, setSelection] = useState<BoardSelection>(null)
   const [promoteResolver, setPromoteResolver] = useState<((v: boolean) => void) | null>(null)
+  const [showTagSearch, setShowTagSearch] = useState(false)
   const mainRef = useRef<HTMLDivElement>(null)
   const [boardW, setBoardW] = useState(486)
 
@@ -861,6 +862,10 @@ function App(): JSX.Element {
       .map(([name, count]) => ({ name, count }))
   })()
 
+  const tagSearchCandidates = allTags.filter(t =>
+    query === '' || t.name.includes(query)
+  )
+
   const backDisabled = sfenHistory.length === 0
   const resetDisabled = sfenHistory.length === 0 && currentSfen === INITIAL_SFEN
   const btnBase: React.CSSProperties = { padding: '5px 14px', fontSize: '12px', border: '1px solid #aaa', borderRadius: '4px' }
@@ -961,12 +966,48 @@ function App(): JSX.Element {
                   + テキストから追加
                 </button>
               </div>
-              <input
-                value={tagQuery}
-                onChange={e => setTagQuery(e.target.value)}
-                placeholder="タグで絞り込み…"
-                style={{ width: '100%', boxSizing: 'border-box', padding: '5px 8px', fontSize: '12px', border: '1px solid #ccc', borderRadius: '4px', outline: 'none' }}
-              />
+              <div style={{ position: 'relative' }}>
+                <input
+                  value={tagQuery}
+                  onChange={e => setTagQuery(e.target.value)}
+                  onFocus={() => setShowTagSearch(true)}
+                  onBlur={() => setShowTagSearch(false)}
+                  placeholder="タグで絞り込み…"
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '5px 8px', fontSize: '12px', border: '1px solid #ccc', borderRadius: '4px', outline: 'none' }}
+                />
+                {showTagSearch && tagSearchCandidates.length > 0 && (
+                  <div style={{
+                    position: 'absolute',
+                    top: 'calc(100% + 2px)',
+                    left: 0,
+                    right: 0,
+                    zIndex: 200,
+                    background: '#fff',
+                    border: '1px solid #ccc',
+                    borderRadius: '4px',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.12)',
+                    maxHeight: '200px',
+                    overflowY: 'auto',
+                  }}>
+                    {tagSearchCandidates.map(t => (
+                      <div
+                        key={t.name}
+                        onMouseDown={e => {
+                          e.preventDefault()
+                          setTagQuery(t.name)
+                          setShowTagSearch(false)
+                        }}
+                        style={{ padding: '5px 10px', fontSize: '12px', cursor: 'pointer', color: '#333', whiteSpace: 'nowrap' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = '#f0f4ff')}
+                        onMouseLeave={e => (e.currentTarget.style.background = '')}
+                      >
+                        <span style={{ color: '#2a5bd7' }}>#{t.name}</span>
+                        <span style={{ marginLeft: '6px', fontSize: '10px', color: '#aaa' }}>{t.count}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', padding: '0 8px 8px' }}>
