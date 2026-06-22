@@ -5,7 +5,15 @@ import { sfenToBoard, applyMove, boardToSfen } from '../../shared/board'
 import { findToSquares, findDropSquares } from '../../shared/moveGen'
 import boardUrl from './assets/shogi/light_878x960.png'
 
-interface MoveCount { move: string; count: number }
+interface MoveCount {
+  move: string
+  count: number
+  fromFile: number | null
+  fromRank: number | null
+  toFile: number | null
+  toRank: number | null
+  isDrop: number | null
+}
 
 declare global {
   interface Window {
@@ -16,6 +24,8 @@ declare global {
       removeTag: (kifuPath: string, tagName: string) => Promise<void>
       savePastedKif: (text: string, suggestedName: string) => Promise<KifuFile[] | null>
       deleteKifu: (kifuPath: string) => Promise<KifuFile[]>
+      updateKifuPath: (oldPath: string, newPath: string) => Promise<KifuFile[]>
+      reimportKifu: (kifuPath: string) => Promise<KifuFile[]>
       applyMoveString: (sfen: string, move: string) => Promise<string | null>
       getPositionStats: (sfen: string, tagQuery: string) => Promise<MoveCount[]>
       onKifuFileOpened: (callback: (files: KifuFile[]) => void) => () => void
@@ -361,15 +371,22 @@ function ResizeHandle(): JSX.Element {
 
 // ---- ShogiBoard ----
 
+const ARROW_STYLES = [
+  { opacity: 0.85, strokeWidth: 0.18 },
+  { opacity: 0.50, strokeWidth: 0.14 },
+  { opacity: 0.28, strokeWidth: 0.11 },
+]
+
 interface ShogiBoardProps {
   sfen: string
   boardW: number
   selection: BoardSelection
+  arrowMoves: MoveCount[]
   onSquareClick: (file: number, rank: number) => void
   onHandClick: (piece: string, isSente: boolean) => void
 }
 
-function ShogiBoard({ sfen, boardW, selection, onSquareClick, onHandClick }: ShogiBoardProps): JSX.Element {
+function ShogiBoard({ sfen, boardW, selection, arrowMoves, onSquareClick, onHandClick }: ShogiBoardProps): JSX.Element {
   const parts = sfen.split(' ')
   const board = parseSfenBoard(parts[0])
   const { sente: senteHand, gote: goteHand } = parseSfenHand(parts[2] ?? '-')
@@ -388,6 +405,77 @@ function ShogiBoard({ sfen, boardW, selection, onSquareClick, onHandClick }: Sho
           alt=""
           draggable={false}
         />
+        <svg
+          style={{
+            position: 'absolute',
+            top: '1.1458%',
+            bottom: '1.3542%',
+            left: '1.3668%',
+            right: '1.4806%',
+            width: 'calc(100% - 1.3668% - 1.4806%)',
+            height: 'calc(100% - 1.1458% - 1.3542%)',
+            pointerEvents: 'none',
+            zIndex: 10,
+            overflow: 'visible',
+          }}
+          viewBox="0 0 9 9"
+          preserveAspectRatio="none"
+        >
+          <defs>
+            {ARROW_STYLES.map((s, i) => (
+              <marker
+                key={i}
+                id={`stat-arrowhead-${i}`}
+                viewBox="0 0 10 10"
+                refX="8"
+                refY="5"
+                markerWidth="3.5"
+                markerHeight="3.5"
+                orient="auto"
+              >
+                <path d="M0,0 L10,5 L0,10 Z" fill={`rgba(220,30,30,${s.opacity})`} />
+              </marker>
+            ))}
+          </defs>
+          {arrowMoves.slice(0, 3).map((m, i) => {
+            const style = ARROW_STYLES[i]
+            const x2 = 9.5 - (m.toFile ?? 0)
+            const y2 = (m.toRank ?? 0) - 0.5
+            if (m.isDrop || m.fromFile == null || m.fromRank == null) {
+              return (
+                <circle
+                  key={i}
+                  cx={x2}
+                  cy={y2}
+                  r={0.3}
+                  fill={`rgba(220,30,30,${style.opacity})`}
+                />
+              )
+            }
+            const x1 = 9.5 - m.fromFile
+            const y1 = m.fromRank - 0.5
+            // 矢印が短いとき頭が消えないよう線端を少し手前で止める
+            const dx = x2 - x1
+            const dy = y2 - y1
+            const len = Math.sqrt(dx * dx + dy * dy)
+            const trim = len > 0 ? 0.15 / len : 0
+            const ex = x2 - dx * trim
+            const ey = y2 - dy * trim
+            return (
+              <line
+                key={i}
+                x1={x1}
+                y1={y1}
+                x2={ex}
+                y2={ey}
+                stroke={`rgba(220,30,30,${style.opacity})`}
+                strokeWidth={style.strokeWidth}
+                strokeLinecap="round"
+                markerEnd={`url(#stat-arrowhead-${i})`}
+              />
+            )
+          })}
+        </svg>
         <div style={{
           position: 'absolute',
           top: '1.1458%',    // 11px / 960px
@@ -460,14 +548,38 @@ interface KifuListItemProps {
   onTagAdd: (tagName: string) => void
   onTagRemove: (tagName: string) => void
   onDelete: () => void
+  onReimport: () => Promise<void>
+  onRelocate: () => Promise<void>
 }
 
-function KifuListItem({ kifu, allTags, onTagAdd, onTagRemove, onDelete }: KifuListItemProps): JSX.Element {
+function KifuListItem({ kifu, allTags, onTagAdd, onTagRemove, onDelete, onReimport, onRelocate }: KifuListItemProps): JSX.Element {
   const [input, setInput] = useState('')
   const [hovered, setHovered] = useState(false)
   const [confirming, setConfirming] = useState(false)
+  const [reimporting, setReimporting] = useState(false)
+  const [relocating, setRelocating] = useState(false)
   const [showDropdown, setShowDropdown] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  async function handleReimport(e: React.MouseEvent): Promise<void> {
+    e.stopPropagation()
+    setReimporting(true)
+    try {
+      await onReimport()
+    } finally {
+      setReimporting(false)
+    }
+  }
+
+  async function handleRelocate(e: React.MouseEvent): Promise<void> {
+    e.stopPropagation()
+    setRelocating(true)
+    try {
+      await onRelocate()
+    } finally {
+      setRelocating(false)
+    }
+  }
 
   const candidates = allTags.filter(t =>
     !kifu.tags.includes(t.name) &&
@@ -492,21 +604,56 @@ function KifuListItem({ kifu, allTags, onTagAdd, onTagRemove, onDelete }: KifuLi
       style={{ padding: '8px', borderRadius: '4px', cursor: 'default', background: hovered ? '#f5f5f5' : '' }}
     >
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '4px' }}>
-        <div style={{ fontSize: '13px', color: '#333', flex: 1, minWidth: 0, wordBreak: 'break-all' }}>
+        <div style={{ fontSize: '13px', color: kifu.exists ? '#333' : '#c44', flex: 1, minWidth: 0, wordBreak: 'break-all' }}>
           {kifu.fileName}
+          {!kifu.exists && (
+            <span style={{ marginLeft: '4px', fontSize: '10px', color: '#c44' }}>（ファイルなし）</span>
+          )}
         </div>
-        {hovered && !confirming && (
-          <button
-            onClick={e => { e.stopPropagation(); setConfirming(true) }}
-            title="棋譜を削除"
-            style={{
-              marginLeft: '6px', flexShrink: 0, padding: '1px 6px', fontSize: '11px',
-              border: '1px solid #e88', borderRadius: '4px', cursor: 'pointer',
-              background: '#fff', color: '#c33',
-            }}
-          >
-            削除
-          </button>
+        {!kifu.exists && !confirming && (
+          <div style={{ display: 'flex', gap: '4px', marginLeft: '6px', flexShrink: 0 }}>
+            <button
+              onClick={handleRelocate}
+              disabled={relocating}
+              title="ファイルの場所を再指定"
+              style={{
+                padding: '1px 6px', fontSize: '11px',
+                border: '1px solid #e90', borderRadius: '4px',
+                cursor: relocating ? 'default' : 'pointer',
+                background: '#fff7ee', color: relocating ? '#aaa' : '#c60',
+              }}
+            >
+              {relocating ? '処理中…' : '再指定'}
+            </button>
+          </div>
+        )}
+        {kifu.exists && hovered && !confirming && (
+          <div style={{ display: 'flex', gap: '4px', marginLeft: '6px', flexShrink: 0 }}>
+            <button
+              onClick={handleReimport}
+              disabled={reimporting}
+              title="棋譜ファイルを再読み込み"
+              style={{
+                padding: '1px 6px', fontSize: '11px',
+                border: '1px solid #8ab', borderRadius: '4px',
+                cursor: reimporting ? 'default' : 'pointer',
+                background: '#fff', color: reimporting ? '#aaa' : '#369',
+              }}
+            >
+              {reimporting ? '読込中…' : '再読込'}
+            </button>
+            <button
+              onClick={e => { e.stopPropagation(); setConfirming(true) }}
+              title="棋譜を削除"
+              style={{
+                padding: '1px 6px', fontSize: '11px',
+                border: '1px solid #e88', borderRadius: '4px', cursor: 'pointer',
+                background: '#fff', color: '#c33',
+              }}
+            >
+              削除
+            </button>
+          </div>
         )}
         {confirming && (
           <div style={{ display: 'flex', gap: '4px', marginLeft: '6px', flexShrink: 0 }}>
@@ -847,6 +994,22 @@ function App(): JSX.Element {
     setKifuList(updated)
   }
 
+  async function handleKifuReimport(kifuPath: string): Promise<void> {
+    const updated = await window.api.reimportKifu(kifuPath)
+    setKifuList(updated)
+    const newStats = await window.api.getPositionStats(currentSfen, tagQuery)
+    setStats(newStats)
+  }
+
+  async function handleKifuRelocate(oldPath: string): Promise<void> {
+    const newPath = await window.api.selectKifuFile()
+    if (!newPath) return
+    const updated = await window.api.updateKifuPath(oldPath, newPath)
+    setKifuList(updated)
+    const newStats = await window.api.getPositionStats(currentSfen, tagQuery)
+    setStats(newStats)
+  }
+
   const query = tagQuery.trim().replace(/^#+/, '')
   const filtered = query
     ? kifuList.filter(f => f.tags.some(t => t.includes(query)))
@@ -902,6 +1065,7 @@ function App(): JSX.Element {
                 sfen={currentSfen}
                 boardW={boardW}
                 selection={selection}
+                arrowMoves={stats.slice(0, 3)}
                 onSquareClick={handleSquareClick}
                 onHandClick={handleHandClick}
               />
@@ -1025,6 +1189,8 @@ function App(): JSX.Element {
                       onTagAdd={name => handleTagAdd(f.path, name)}
                       onTagRemove={name => handleTagRemove(f.path, name)}
                       onDelete={() => handleKifuDelete(f.path)}
+                      onReimport={() => handleKifuReimport(f.path)}
+                      onRelocate={() => handleKifuRelocate(f.path)}
                     />
                   ))}
                 </ul>

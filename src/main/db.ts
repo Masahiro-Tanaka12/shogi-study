@@ -1,4 +1,6 @@
 import Database from 'better-sqlite3'
+import { existsSync } from 'fs'
+import { basename } from 'path'
 import type { KifuFile, PositionEntry } from '../shared/types'
 import { moveLabel } from '../shared/stats'
 
@@ -26,6 +28,19 @@ const SCHEMA = `
     tag_id  INTEGER NOT NULL REFERENCES tags(id)  ON DELETE CASCADE,
     PRIMARY KEY (kifu_id, tag_id)
   );
+  CREATE TABLE IF NOT EXISTS kifu_moves (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    kifu_id      INTEGER NOT NULL REFERENCES kifus(id) ON DELETE CASCADE,
+    move_number  INTEGER NOT NULL,
+    from_file    INTEGER,
+    from_rank    INTEGER,
+    to_file      INTEGER NOT NULL,
+    to_rank      INTEGER NOT NULL,
+    piece        TEXT NOT NULL,
+    is_drop      INTEGER NOT NULL DEFAULT 0,
+    is_promotion INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS idx_kifu_moves_kifu ON kifu_moves(kifu_id);
 `
 
 export type Db = Database.Database
@@ -51,8 +66,9 @@ export function insertKifuIfNew(
       'SELECT COUNT(*) as n FROM positions WHERE kifu_id = ? AND next_move IS NOT NULL'
     ).get(existing.id) as { n: number }
     if (n > 0) return { id: existing.id, isNew: false }
-    // 指し手なし = 文字化けによる壊れた取込み → positions を削除して再取込みを許可（タグは保持）
+    // 指し手なし = 文字化けによる壊れた取込み → positions/kifu_moves を削除して再取込みを許可（タグは保持）
     db.prepare('DELETE FROM positions WHERE kifu_id = ?').run(existing.id)
+    db.prepare('DELETE FROM kifu_moves WHERE kifu_id = ?').run(existing.id)
     console.log(`[db] re-import: ${filePath} (corrupted positions cleared)`)
     return { id: existing.id, isNew: true }
   }
@@ -78,6 +94,30 @@ export function insertPositions(db: Db, kifuId: number, entries: PositionEntry[]
   insertAll(entries)
 }
 
+export function insertKifuMoves(db: Db, kifuId: number, entries: PositionEntry[]): void {
+  const insert = db.prepare(`
+    INSERT INTO kifu_moves (kifu_id, move_number, from_file, from_rank, to_file, to_rank, piece, is_drop, is_promotion)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+  const insertAll = db.transaction((rows: PositionEntry[]) => {
+    for (const { nextMove } of rows) {
+      if (!nextMove || nextMove.isSpecial) continue
+      insert.run(
+        kifuId,
+        nextMove.moveNumber,
+        nextMove.fromFile ?? null,
+        nextMove.fromRank ?? null,
+        nextMove.toFile,
+        nextMove.toRank,
+        nextMove.piece,
+        nextMove.isDrop ? 1 : 0,
+        nextMove.isPromotion ? 1 : 0,
+      )
+    }
+  })
+  insertAll(entries)
+}
+
 export function getAllKifus(db: Db): KifuFile[] {
   const rows = db.prepare(`
     SELECT k.file_path, k.file_name,
@@ -93,6 +133,7 @@ export function getAllKifus(db: Db): KifuFile[] {
     path: r.file_path,
     fileName: r.file_name,
     tags: r.tag_names ? r.tag_names.split(',') : [],
+    exists: existsSync(r.file_path),
   }))
 }
 
@@ -109,6 +150,19 @@ export function deleteKifu(db: Db, kifuPath: string): void {
   db.prepare('DELETE FROM kifus WHERE file_path = ?').run(kifuPath)
 }
 
+export function updateKifuPath(db: Db, oldPath: string, newPath: string): void {
+  db.prepare('UPDATE kifus SET file_path=?, file_name=? WHERE file_path=?')
+    .run(newPath, basename(newPath), oldPath)
+}
+
+export function clearKifuPositions(db: Db, kifuPath: string): { positions: number; moves: number } {
+  const kifu = db.prepare('SELECT id FROM kifus WHERE file_path = ?').get(kifuPath) as { id: number } | undefined
+  if (!kifu) return { positions: 0, moves: 0 }
+  const positions = db.prepare('DELETE FROM positions WHERE kifu_id = ?').run(kifu.id).changes
+  const moves = db.prepare('DELETE FROM kifu_moves WHERE kifu_id = ?').run(kifu.id).changes
+  return { positions, moves }
+}
+
 export function removeTag(db: Db, kifuPath: string, tagName: string): void {
   const kifu = db.prepare('SELECT id FROM kifus WHERE file_path = ?').get(kifuPath) as { id: number } | undefined
   if (!kifu) return
@@ -122,6 +176,11 @@ export function removeTag(db: Db, kifuPath: string, tagName: string): void {
 export interface MoveCount {
   move: string
   count: number
+  fromFile: number | null
+  fromRank: number | null
+  toFile: number | null
+  toRank: number | null
+  isDrop: number | null
 }
 
 export function getNextSfen(db: Db, sfen: string, move: string): string | null {
@@ -138,8 +197,12 @@ export function getNextSfen(db: Db, sfen: string, move: string): string | null {
 export function getPositionStats(db: Db, sfen: string, tagQuery?: string): MoveCount[] {
   if (tagQuery) {
     return db.prepare(`
-      SELECT p.next_move AS move, COUNT(*) AS count
+      SELECT p.next_move AS move, COUNT(*) AS count,
+             km.from_file AS fromFile, km.from_rank AS fromRank,
+             km.to_file   AS toFile,   km.to_rank   AS toRank,
+             km.is_drop   AS isDrop
       FROM positions p
+      LEFT JOIN kifu_moves km ON km.kifu_id = p.kifu_id AND km.move_number = p.move_number
       JOIN kifu_tags kt ON kt.kifu_id = p.kifu_id
       JOIN tags t       ON t.id = kt.tag_id
       WHERE p.sfen = ? AND p.next_move IS NOT NULL AND t.name LIKE ?
@@ -149,10 +212,14 @@ export function getPositionStats(db: Db, sfen: string, tagQuery?: string): MoveC
   }
 
   return db.prepare(`
-    SELECT next_move AS move, COUNT(*) AS count
-    FROM positions
-    WHERE sfen = ? AND next_move IS NOT NULL
-    GROUP BY next_move
+    SELECT p.next_move AS move, COUNT(*) AS count,
+           km.from_file AS fromFile, km.from_rank AS fromRank,
+           km.to_file   AS toFile,   km.to_rank   AS toRank,
+           km.is_drop   AS isDrop
+    FROM positions p
+    LEFT JOIN kifu_moves km ON km.kifu_id = p.kifu_id AND km.move_number = p.move_number
+    WHERE p.sfen = ? AND p.next_move IS NOT NULL
+    GROUP BY p.next_move
     ORDER BY count DESC
   `).all(sfen) as MoveCount[]
 }

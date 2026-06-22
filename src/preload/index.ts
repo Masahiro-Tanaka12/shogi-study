@@ -11,6 +11,10 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('save-pasted-kif', text, suggestedName),
   deleteKifu: (kifuPath: string): Promise<KifuFile[]> =>
     ipcRenderer.invoke('delete-kifu', kifuPath),
+  updateKifuPath: (oldPath: string, newPath: string): Promise<KifuFile[]> =>
+    ipcRenderer.invoke('update-kifu-path', oldPath, newPath),
+  reimportKifu: (kifuPath: string): Promise<KifuFile[]> =>
+    ipcRenderer.invoke('reimport-kifu', kifuPath),
   applyMoveString: (sfen: string, move: string): Promise<string | null> =>
     ipcRenderer.invoke('apply-move-string', sfen, move),
   getPositionStats: (sfen: string, tagQuery: string): Promise<{ move: string; count: number }[]> =>
