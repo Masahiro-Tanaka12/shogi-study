@@ -370,8 +370,6 @@ interface ShogiBoardProps {
 }
 
 function ShogiBoard({ sfen, boardW, selection, onSquareClick, onHandClick }: ShogiBoardProps): JSX.Element {
-  const boardH = Math.round(boardW * 960 / 878)
-  const boardPad = Math.round(boardW * 18 / 878)
   const parts = sfen.split(' ')
   const board = parseSfenBoard(parts[0])
   const { sente: senteHand, gote: goteHand } = parseSfenHand(parts[2] ?? '-')
@@ -383,7 +381,7 @@ function ShogiBoard({ sfen, boardW, selection, onSquareClick, onHandClick }: Sho
   return (
     <div style={{ userSelect: 'none' }}>
       <HandArea hand={goteHand} isSente={false} selection={selection} onHandClick={onHandClick} />
-      <div style={{ position: 'relative', width: boardW, height: boardH }}>
+      <div style={{ position: 'relative', width: boardW, aspectRatio: '878 / 960' }}>
         <img
           src={boardUrl}
           style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
@@ -392,9 +390,12 @@ function ShogiBoard({ sfen, boardW, selection, onSquareClick, onHandClick }: Sho
         />
         <div style={{
           position: 'absolute',
-          top: boardPad, left: boardPad, right: boardPad, bottom: boardPad,
+          top: '1.1458%',    // 11px / 960px
+          bottom: '1.3542%', // 13px / 960px
+          left: '1.3668%',   // 12px / 878px
+          right: '1.4806%',  // 13px / 878px
           display: 'grid',
-          gridTemplateColumns: 'repeat(9, 1fr)',
+          gridTemplateColumns: '94fr 95fr 95fr 95fr 95fr 95fr 94fr 95fr 95fr',
           gridTemplateRows: 'repeat(9, 1fr)',
         }}>
           {board.flat().map((cell, i) => {
@@ -455,20 +456,28 @@ function ShogiBoard({ sfen, boardW, selection, onSquareClick, onHandClick }: Sho
 
 interface KifuListItemProps {
   kifu: KifuFile
+  allTags: { name: string; count: number }[]
   onTagAdd: (tagName: string) => void
   onTagRemove: (tagName: string) => void
   onDelete: () => void
 }
 
-function KifuListItem({ kifu, onTagAdd, onTagRemove, onDelete }: KifuListItemProps): JSX.Element {
+function KifuListItem({ kifu, allTags, onTagAdd, onTagRemove, onDelete }: KifuListItemProps): JSX.Element {
   const [input, setInput] = useState('')
   const [hovered, setHovered] = useState(false)
   const [confirming, setConfirming] = useState(false)
+  const [showDropdown, setShowDropdown] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
+  const candidates = allTags.filter(t =>
+    !kifu.tags.includes(t.name) &&
+    (input === '' || t.name.includes(input.replace(/^#+/, '')))
+  )
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>): void {
+    if (e.key === 'Escape') { setShowDropdown(false); return }
     if (e.key !== 'Enter') return
-    const name = input.trim()
+    const name = input.trim().replace(/^#+/, '')
     if (name && !kifu.tags.includes(name)) {
       onTagAdd(name)
     }
@@ -542,18 +551,55 @@ function KifuListItem({ kifu, onTagAdd, onTagRemove, onDelete }: KifuListItemPro
           </span>
         ))}
 
-        <input
-          ref={inputRef}
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="タグ追加…"
-          style={{
-            width: '72px', fontSize: '11px', border: 'none',
-            borderBottom: '1px solid #ccc', outline: 'none',
-            background: 'transparent', color: '#555',
-          }}
-        />
+        <div style={{ position: 'relative', display: 'inline-block' }}>
+          <input
+            ref={inputRef}
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onFocus={() => setShowDropdown(true)}
+            onBlur={() => setShowDropdown(false)}
+            placeholder="タグ追加…"
+            style={{
+              width: '72px', fontSize: '11px', border: 'none',
+              borderBottom: '1px solid #ccc', outline: 'none',
+              background: 'transparent', color: '#555',
+            }}
+          />
+          {showDropdown && candidates.length > 0 && (
+            <div style={{
+              position: 'absolute',
+              top: 'calc(100% + 2px)',
+              left: 0,
+              zIndex: 200,
+              background: '#fff',
+              border: '1px solid #ccc',
+              borderRadius: '4px',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.12)',
+              minWidth: '120px',
+              maxHeight: '160px',
+              overflowY: 'auto',
+            }}>
+              {candidates.map(t => (
+                <div
+                  key={t.name}
+                  onMouseDown={e => {
+                    e.preventDefault()
+                    onTagAdd(t.name)
+                    setInput('')
+                    inputRef.current?.focus()
+                  }}
+                  style={{ padding: '5px 10px', fontSize: '12px', cursor: 'pointer', color: '#333', whiteSpace: 'nowrap' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = '#f0f4ff')}
+                  onMouseLeave={e => (e.currentTarget.style.background = '')}
+                >
+                  <span style={{ color: '#2a5bd7' }}>#{t.name}</span>
+                  <span style={{ marginLeft: '6px', fontSize: '10px', color: '#aaa' }}>{t.count}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </li>
   )
@@ -805,6 +851,16 @@ function App(): JSX.Element {
     ? kifuList.filter(f => f.tags.some(t => t.includes(query)))
     : kifuList
 
+  const allTags = (() => {
+    const counts = new Map<string, number>()
+    for (const k of kifuList) {
+      for (const tag of k.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1)
+    }
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, count]) => ({ name, count }))
+  })()
+
   const backDisabled = sfenHistory.length === 0
   const resetDisabled = sfenHistory.length === 0 && currentSfen === INITIAL_SFEN
   const btnBase: React.CSSProperties = { padding: '5px 14px', fontSize: '12px', border: '1px solid #aaa', borderRadius: '4px' }
@@ -924,6 +980,7 @@ function App(): JSX.Element {
                     <KifuListItem
                       key={f.path}
                       kifu={f}
+                      allTags={allTags}
                       onTagAdd={name => handleTagAdd(f.path, name)}
                       onTagRemove={name => handleTagRemove(f.path, name)}
                       onDelete={() => handleKifuDelete(f.path)}
