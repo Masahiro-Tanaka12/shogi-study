@@ -2,7 +2,7 @@
 // Shift-JIS で保存された KIF ファイルは文字化けする。
 // 対応が必要になったら iconv-lite を導入すること（CLAUDE.md 参照）。
 
-import type { Move } from './types'
+import type { Move, KifuMeta } from './types'
 
 const TO_FILE: Record<string, number> = {
   '１': 1, '２': 2, '３': 3, '４': 4, '５': 5,
@@ -18,9 +18,10 @@ const SPECIAL_MOVES = new Set([
   '投了', '中断', '詰み', '千日手', '時間切れ', '入玉勝ち', '反則勝ち', '反則負け'
 ])
 
-export function parseKif(content: string): Move[] {
+export function parseKif(content: string): { moves: Move[]; meta: KifuMeta } {
   const lines = content.split(/\r?\n/)
   const moves: Move[] = []
+  const meta: KifuMeta = {}
   let inMoves = false
   let prevToFile: number | undefined
   let prevToRank: number | undefined
@@ -29,6 +30,18 @@ export function parseKif(content: string): Move[] {
     if (line.startsWith('#')) continue
 
     const trimmed = line.trim()
+
+    if (!inMoves) {
+      const senteM = /^先手[：:]\s*(.+)/.exec(trimmed)
+      if (senteM) { meta.senteName = senteM[1].trim(); continue }
+      const goteM = /^後手[：:]\s*(.+)/.exec(trimmed)
+      if (goteM) { meta.goteName = goteM[1].trim(); continue }
+      const dateM = /^開始日時[：:]\s*(\d{4})[/\-](\d{1,2})[/\-](\d{1,2})/.exec(trimmed)
+      if (dateM) {
+        meta.gameDate = `${dateM[1]}-${dateM[2].padStart(2, '0')}-${dateM[3].padStart(2, '0')}`
+        continue
+      }
+    }
 
     if (trimmed.startsWith('手数')) {
       inMoves = true
@@ -103,5 +116,5 @@ export function parseKif(content: string): Move[] {
     })
   }
 
-  return moves
+  return { moves, meta }
 }

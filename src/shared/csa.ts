@@ -1,4 +1,4 @@
-import type { Move, Player } from './types'
+import type { Move, Player, KifuMeta } from './types'
 import { createInitialBoard, applyMove } from './board'
 
 // CSA 駒名 → 基本駒名（日本語）
@@ -24,13 +24,21 @@ const CSA_SPECIAL: Record<string, string> = {
 // 標準CSA形式: +FFTTPP / -FFTTPP (FF=from, TT=to, PP=piece)
 const MOVE_RE = /^([+\-])(\d)(\d)(\d)(\d)([A-Z]{2})$/
 
-export function parseCsa(content: string): Move[] {
+export function parseCsa(content: string): { moves: Move[]; meta: KifuMeta } {
+  const meta: KifuMeta = {}
   const moves: Move[] = []
   let state = createInitialBoard()
   let moveNumber = 0
 
   for (const line of content.split(/\r?\n/)) {
     const t = line.trim()
+    if (t.startsWith('N+')) { meta.senteName = t.slice(2).trim(); continue }
+    if (t.startsWith('N-')) { meta.goteName = t.slice(2).trim(); continue }
+    if (t.startsWith('$START_TIME:')) {
+      const dateM = /\$START_TIME:(\d{4})[/\-](\d{1,2})[/\-](\d{1,2})/.exec(t)
+      if (dateM) meta.gameDate = `${dateM[1]}-${dateM[2].padStart(2, '0')}-${dateM[3].padStart(2, '0')}`
+      continue
+    }
     if (!t || t.startsWith("'") || t.startsWith('V') || t.startsWith('N') ||
         t.startsWith('$') || t.startsWith('P') || t === '+' || t === '-') continue
 
@@ -94,5 +102,5 @@ export function parseCsa(content: string): Move[] {
     state = applyMove(state, move)
   }
 
-  return moves
+  return { moves, meta }
 }

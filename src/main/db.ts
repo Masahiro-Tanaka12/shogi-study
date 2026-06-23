@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3'
 import { existsSync } from 'fs'
 import { basename } from 'path'
-import type { KifuFile, PositionEntry } from '../shared/types'
+import type { KifuFile, KifuMeta, PositionEntry } from '../shared/types'
 import { moveLabel } from '../shared/stats'
 
 const SCHEMA = `
@@ -50,6 +50,9 @@ export function initDb(dbPath: string): Db {
   db.pragma('journal_mode = WAL')
   db.pragma('foreign_keys = ON')
   db.exec(SCHEMA)
+  for (const col of ['sente_name', 'gote_name', 'game_date']) {
+    try { db.exec(`ALTER TABLE kifus ADD COLUMN ${col} TEXT`) } catch { /* already exists */ }
+  }
   return db
 }
 
@@ -120,20 +123,23 @@ export function insertKifuMoves(db: Db, kifuId: number, entries: PositionEntry[]
 
 export function getAllKifus(db: Db): KifuFile[] {
   const rows = db.prepare(`
-    SELECT k.file_path, k.file_name,
+    SELECT k.file_path, k.file_name, k.sente_name, k.gote_name, k.game_date,
            GROUP_CONCAT(t.name) AS tag_names
     FROM kifus k
     LEFT JOIN kifu_tags kt ON kt.kifu_id = k.id
     LEFT JOIN tags t       ON t.id = kt.tag_id
     GROUP BY k.id
     ORDER BY k.created_at DESC
-  `).all() as { file_path: string; file_name: string; tag_names: string | null }[]
+  `).all() as { file_path: string; file_name: string; sente_name: string | null; gote_name: string | null; game_date: string | null; tag_names: string | null }[]
 
   return rows.map(r => ({
     path: r.file_path,
     fileName: r.file_name,
     tags: r.tag_names ? r.tag_names.split(',') : [],
     exists: existsSync(r.file_path),
+    senteName: r.sente_name ?? undefined,
+    goteName: r.gote_name ?? undefined,
+    gameDate: r.game_date ?? undefined,
   }))
 }
 
@@ -203,6 +209,11 @@ export function getKifuSfens(db: Db, kifuPath: string): string[] {
     ORDER BY COALESCE(move_number, 99999)
   `).all(kifu.id) as { sfen: string }[]
   return rows.map(r => r.sfen)
+}
+
+export function updateKifuMeta(db: Db, kifuId: number, meta: KifuMeta): void {
+  db.prepare('UPDATE kifus SET sente_name=?, gote_name=?, game_date=? WHERE id=?')
+    .run(meta.senteName ?? null, meta.goteName ?? null, meta.gameDate ?? null, kifuId)
 }
 
 export function getKifuMoveLabels(db: Db, kifuPath: string): string[] {

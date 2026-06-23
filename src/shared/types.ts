@@ -1,8 +1,17 @@
+export interface KifuMeta {
+  senteName?: string
+  goteName?: string
+  gameDate?: string  // YYYY-MM-DD
+}
+
 export interface KifuFile {
   fileName: string
   path: string
   tags: string[]
   exists: boolean
+  senteName?: string
+  goteName?: string
+  gameDate?: string
 }
 
 export interface Move {

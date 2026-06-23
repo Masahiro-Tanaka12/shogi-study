@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
-type KifuFile = { fileName: string; path: string; tags: string[] }
+type KifuFile = { fileName: string; path: string; tags: string[]; exists: boolean; senteName?: string; goteName?: string; gameDate?: string }
 
 contextBridge.exposeInMainWorld('api', {
   selectKifuFile: (): Promise<string | null> => ipcRenderer.invoke('select-kifu-file'),

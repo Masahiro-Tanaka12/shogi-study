@@ -15,7 +15,7 @@ import { parseKi2 } from '../shared/ki2'
 import { parseCsa } from '../shared/csa'
 import { buildBoardState, boardToSfen, debugBoard, enumeratePositions, createInitialBoard } from '../shared/board'
 import { aggregatePositions, logPositionStats, type PositionStats } from '../shared/stats'
-import { initDb, insertKifuIfNew, insertPositions, insertKifuMoves, getAllKifus, addTag, removeTag, deleteKifu, updateKifuPath, clearKifuPositions, getPositionStats, getNextSfen, getKifuSfens, getKifuMoveLabels, type Db } from './db'
+import { initDb, insertKifuIfNew, insertPositions, insertKifuMoves, getAllKifus, addTag, removeTag, deleteKifu, updateKifuPath, clearKifuPositions, updateKifuMeta, getPositionStats, getNextSfen, getKifuSfens, getKifuMoveLabels, type Db } from './db'
 
 const allStats: PositionStats = {}
 const INITIAL_SFEN = boardToSfen(createInitialBoard())
@@ -62,7 +62,7 @@ async function processKifFile(p: string): Promise<{ isNew: boolean }> {
   const encoding = hasReplacement ? 'Shift_JIS' : 'UTF-8'
   const content = hasReplacement ? iconv.decode(buf, 'Shift_JIS') : utf8
   const ext = extname(p).toLowerCase()
-  const moves = ext === '.ki2' ? parseKi2(content)
+  const { moves, meta } = ext === '.ki2' ? parseKi2(content)
     : ext === '.csa' ? parseCsa(content)
     : parseKif(content)
   const positions = enumeratePositions(moves)
@@ -79,6 +79,7 @@ async function processKifFile(p: string): Promise<{ isNew: boolean }> {
   } else {
     console.log(`[db] skip: ${basename(p)} already exists (id=${kifuId})`)
   }
+  updateKifuMeta(db, kifuId, meta)
   aggregatePositions(positions, allStats)
   return { isNew }
 }
@@ -139,7 +140,7 @@ ipcMain.handle('reimport-kifu', async (_event, kifuPath: string) => {
   const utf8 = buf.toString('utf-8')
   const content = utf8.includes('�') ? iconv.decode(buf, 'Shift_JIS') : utf8
   const ext = extname(kifuPath).toLowerCase()
-  const moves = ext === '.ki2' ? parseKi2(content)
+  const { moves, meta } = ext === '.ki2' ? parseKi2(content)
     : ext === '.csa' ? parseCsa(content)
     : parseKif(content)
   const positions = enumeratePositions(moves)
@@ -159,6 +160,7 @@ ipcMain.handle('reimport-kifu', async (_event, kifuPath: string) => {
   console.log(`[reimport] 削除: positions=${deleted.positions}, kifu_moves=${deleted.moves}`)
   insertPositions(db, row.id, positions)
   insertKifuMoves(db, row.id, positions)
+  updateKifuMeta(db, row.id, meta)
   const insertedMoves = positions.filter(e => e.nextMove && !e.nextMove.isSpecial).length
   console.log(`[reimport] 挿入: positions=${positions.length}, kifu_moves=${insertedMoves}`)
   console.log(`[reimport] 完了: ${basename(kifuPath)} (${validCount} 手, ${positions.length} 局面)`)

@@ -1,4 +1,4 @@
-import type { Move, Player } from './types'
+import type { Move, Player, KifuMeta } from './types'
 import { createInitialBoard, applyMove } from './board'
 import { findFromSquares } from './moveGen'
 
@@ -39,7 +39,19 @@ const PROMOTED_NAME: Record<string, string> = {
 // グループ: (1)▲△▽  (2)行き先  (3)駒名  (4)成|打
 const MOVE_RE = /([▲△▽])(同[　 ]*|[１-９1-9][一二三四五六七八九])(成[香桂銀]|[歩香桂銀金角飛王玉と馬龍竜])(成|打)?/g
 
-export function parseKi2(content: string): Move[] {
+export function parseKi2(content: string): { moves: Move[]; meta: KifuMeta } {
+  const meta: KifuMeta = {}
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (/[▲△▽]/.test(trimmed)) break
+    const senteM = /^先手[：:]\s*(.+)/.exec(trimmed)
+    if (senteM) { meta.senteName = senteM[1].trim(); continue }
+    const goteM = /^後手[：:]\s*(.+)/.exec(trimmed)
+    if (goteM) { meta.goteName = goteM[1].trim(); continue }
+    const dateM = /^開始日時[：:]\s*(\d{4})[/\-](\d{1,2})[/\-](\d{1,2})/.exec(trimmed)
+    if (dateM) meta.gameDate = `${dateM[1]}-${dateM[2].padStart(2, '0')}-${dateM[3].padStart(2, '0')}`
+  }
+
   const moves: Move[] = []
   let state = createInitialBoard()
   let moveNumber = 0
@@ -119,5 +131,5 @@ export function parseKi2(content: string): Move[] {
     })
   }
 
-  return moves
+  return { moves, meta }
 }

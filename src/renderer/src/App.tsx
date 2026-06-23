@@ -614,10 +614,20 @@ function KifuListItem({ kifu, isReplaying, allTags, onTagAdd, onTagRemove, onDel
       }}
     >
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '4px' }}>
-        <div style={{ fontSize: '13px', color: kifu.exists ? '#333' : '#c44', flex: 1, minWidth: 0, wordBreak: 'break-all' }}>
-          {kifu.fileName}
-          {!kifu.exists && (
-            <span style={{ marginLeft: '4px', fontSize: '10px', color: '#c44' }}>（ファイルなし）</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: '13px', color: kifu.exists ? '#333' : '#c44', wordBreak: 'break-all' }}>
+            {kifu.fileName}
+            {!kifu.exists && (
+              <span style={{ marginLeft: '4px', fontSize: '10px', color: '#c44' }}>（ファイルなし）</span>
+            )}
+          </div>
+          {(kifu.senteName || kifu.goteName || kifu.gameDate) && (
+            <div style={{ fontSize: '11px', color: '#888', marginTop: '1px' }}>
+              {kifu.senteName && <span>▲{kifu.senteName}</span>}
+              {kifu.senteName && kifu.goteName && <span style={{ margin: '0 3px' }}>vs</span>}
+              {kifu.goteName && <span>△{kifu.goteName}</span>}
+              {kifu.gameDate && <span style={{ marginLeft: '6px', color: '#aaa' }}>{kifu.gameDate}</span>}
+            </div>
           )}
         </div>
         {!kifu.exists && !confirming && (
@@ -879,6 +889,7 @@ function sidePrefix(sfen: string): string {
 function App(): JSX.Element {
   const [kifuList, setKifuList] = useState<KifuFile[]>([])
   const [tagQuery, setTagQuery] = useState('')
+  const [filterQuery, setFilterQuery] = useState('')
   const [showPasteModal, setShowPasteModal] = useState(false)
   const [folderImporting, setFolderImporting] = useState(false)
   const [importResult, setImportResult] = useState<{ imported: number; skipped: number; failed: number; total: number } | null>(null)
@@ -1173,9 +1184,19 @@ function App(): JSX.Element {
   }
 
   const query = tagQuery.trim().replace(/^#+/, '')
-  const filtered = query
+  const tagFiltered = query
     ? kifuList.filter(f => f.tags.some(t => t.includes(query)))
     : kifuList
+
+  const fq = filterQuery.trim().toLowerCase()
+  const filtered = fq
+    ? tagFiltered.filter(f =>
+        f.fileName.toLowerCase().includes(fq) ||
+        (f.senteName?.toLowerCase().includes(fq) ?? false) ||
+        (f.goteName?.toLowerCase().includes(fq) ?? false) ||
+        (f.gameDate?.includes(fq) ?? false)
+      )
+    : tagFiltered
 
   const allTags = (() => {
     const counts = new Map<string, number>()
@@ -1405,12 +1426,18 @@ function App(): JSX.Element {
                   </div>
                 )}
               </div>
+              <input
+                value={filterQuery}
+                onChange={e => setFilterQuery(e.target.value)}
+                placeholder="先手・後手・日付で検索…"
+                style={{ width: '100%', boxSizing: 'border-box', marginTop: '4px', padding: '5px 8px', fontSize: '12px', border: '1px solid #ccc', borderRadius: '4px', outline: 'none' }}
+              />
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', padding: '0 8px 8px' }}>
               {filtered.length === 0 ? (
                 <p style={{ fontSize: '13px', color: '#999', margin: '8px' }}>
-                  {query ? 'タグが一致する棋譜がありません' : '棋譜がありません'}
+                  {query || fq ? '検索条件に一致する棋譜がありません' : '棋譜がありません'}
                 </p>
               ) : (
                 <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>
