@@ -30,7 +30,7 @@ declare global {
       getKifuMoveLabels: (kifuPath: string) => Promise<string[]>
       importFolder: () => Promise<{ imported: number; skipped: number; failed: number; total: number; kifuList: KifuFile[] } | null>
       applyMoveString: (sfen: string, move: string) => Promise<string | null>
-      getPositionStats: (sfen: string, tagQuery: string) => Promise<MoveCount[]>
+      getPositionStats: (sfen: string, tags: string[], mode: 'AND' | 'OR') => Promise<MoveCount[]>
       onKifuFileOpened: (callback: (files: KifuFile[]) => void) => () => void
     }
   }
@@ -889,6 +889,7 @@ function sidePrefix(sfen: string): string {
 function App(): JSX.Element {
   const [kifuList, setKifuList] = useState<KifuFile[]>([])
   const [tagQuery, setTagQuery] = useState('')
+  const [tagMode, setTagMode] = useState<'AND' | 'OR'>('OR')
   const [filterQuery, setFilterQuery] = useState('')
   const [showPasteModal, setShowPasteModal] = useState(false)
   const [folderImporting, setFolderImporting] = useState(false)
@@ -933,8 +934,9 @@ function App(): JSX.Element {
   }, [])
 
   useEffect(() => {
-    window.api.getPositionStats(currentSfen, tagQuery).then(setStats)
-  }, [currentSfen, tagQuery])
+    const tags = tagQuery.replace(/^#+/, '').trim().split(/\s+/).filter(Boolean)
+    window.api.getPositionStats(currentSfen, tags, tagMode).then(setStats)
+  }, [currentSfen, tagQuery, tagMode])
 
   useEffect(() => {
     function handleKey(e: KeyboardEvent): void {
@@ -1132,7 +1134,8 @@ function App(): JSX.Element {
   async function handleKifuReimport(kifuPath: string): Promise<void> {
     const updated = await window.api.reimportKifu(kifuPath)
     setKifuList(updated)
-    const newStats = await window.api.getPositionStats(currentSfen, tagQuery)
+    const tags = tagQuery.replace(/^#+/, '').trim().split(/\s+/).filter(Boolean)
+    const newStats = await window.api.getPositionStats(currentSfen, tags, tagMode)
     setStats(newStats)
   }
 
@@ -1179,14 +1182,19 @@ function App(): JSX.Element {
     if (!newPath) return
     const updated = await window.api.updateKifuPath(oldPath, newPath)
     setKifuList(updated)
-    const newStats = await window.api.getPositionStats(currentSfen, tagQuery)
+    const tags = tagQuery.replace(/^#+/, '').trim().split(/\s+/).filter(Boolean)
+    const newStats = await window.api.getPositionStats(currentSfen, tags, tagMode)
     setStats(newStats)
   }
 
-  const query = tagQuery.trim().replace(/^#+/, '')
-  const tagFiltered = query
-    ? kifuList.filter(f => f.tags.some(t => t.includes(query)))
-    : kifuList
+  const rawTagInput = tagQuery.replace(/^#+/, '').trim()
+  const parsedTags = rawTagInput === '' ? [] : rawTagInput.split(/\s+/).filter(Boolean)
+  const activeSearch = tagQuery.endsWith(' ') ? '' : (parsedTags[parsedTags.length - 1] ?? '')
+
+  const tagFiltered = parsedTags.length === 0 ? kifuList
+    : tagMode === 'OR'
+      ? kifuList.filter(f => parsedTags.some(tag => f.tags.some(t => t.includes(tag))))
+      : kifuList.filter(f => parsedTags.every(tag => f.tags.some(t => t.includes(tag))))
 
   const fq = filterQuery.trim().toLowerCase()
   const filtered = fq
@@ -1209,7 +1217,7 @@ function App(): JSX.Element {
   })()
 
   const tagSearchCandidates = allTags.filter(t =>
-    query === '' || t.name.includes(query)
+    activeSearch === '' || t.name.includes(activeSearch)
   )
 
   const backDisabled = sfenHistory.length === 0
@@ -1333,9 +1341,9 @@ function App(): JSX.Element {
             ) : (
               <>
                 <h3 style={{ margin: '0 0 4px', fontSize: '14px', color: '#333' }}>統計</h3>
-                {tagQuery.trim() && (
+                {parsedTags.length > 0 && (
                   <p style={{ margin: '0 0 10px', fontSize: '11px', color: '#2a5bd7' }}>
-                    絞り込み中: #{tagQuery.trim()}
+                    絞り込み中: {parsedTags.map(t => `#${t}`).join(tagMode === 'AND' ? ' かつ ' : ' または ')}
                   </p>
                 )}
                 {stats.length === 0 ? (
@@ -1384,47 +1392,74 @@ function App(): JSX.Element {
                   </div>
                 )}
               </div>
-              <div style={{ position: 'relative' }}>
-                <input
-                  value={tagQuery}
-                  onChange={e => setTagQuery(e.target.value)}
-                  onFocus={() => setShowTagSearch(true)}
-                  onBlur={() => setShowTagSearch(false)}
-                  placeholder="タグで絞り込み…"
-                  style={{ width: '100%', boxSizing: 'border-box', padding: '5px 8px', fontSize: '12px', border: '1px solid #ccc', borderRadius: '4px', outline: 'none' }}
-                />
-                {showTagSearch && tagSearchCandidates.length > 0 && (
-                  <div style={{
-                    position: 'absolute',
-                    top: 'calc(100% + 2px)',
-                    left: 0,
-                    right: 0,
-                    zIndex: 200,
-                    background: '#fff',
+              <div style={{ display: 'flex', gap: '4px', alignItems: 'stretch' }}>
+                <div style={{ position: 'relative', flex: 1 }}>
+                  <input
+                    value={tagQuery}
+                    onChange={e => setTagQuery(e.target.value)}
+                    onFocus={() => setShowTagSearch(true)}
+                    onBlur={() => setShowTagSearch(false)}
+                    placeholder="タグで絞り込み…（スペース区切りで複数）"
+                    style={{ width: '100%', boxSizing: 'border-box', padding: '5px 8px', fontSize: '12px', border: '1px solid #ccc', borderRadius: '4px', outline: 'none' }}
+                  />
+                  {showTagSearch && tagSearchCandidates.length > 0 && (
+                    <div style={{
+                      position: 'absolute',
+                      top: 'calc(100% + 2px)',
+                      left: 0,
+                      right: 0,
+                      zIndex: 200,
+                      background: '#fff',
+                      border: '1px solid #ccc',
+                      borderRadius: '4px',
+                      boxShadow: '0 4px 12px rgba(0,0,0,0.12)',
+                      maxHeight: '200px',
+                      overflowY: 'auto',
+                    }}>
+                      {tagSearchCandidates.map(t => (
+                        <div
+                          key={t.name}
+                          onMouseDown={e => {
+                            e.preventDefault()
+                            const base = tagQuery.replace(/^#+/, '')
+                            if (base === '' || base.endsWith(' ')) {
+                              setTagQuery(base + t.name)
+                            } else {
+                              const tokens = base.split(/\s+/)
+                              tokens[tokens.length - 1] = t.name
+                              setTagQuery(tokens.join(' '))
+                            }
+                            setShowTagSearch(false)
+                          }}
+                          style={{ padding: '5px 10px', fontSize: '12px', cursor: 'pointer', color: '#333', whiteSpace: 'nowrap' }}
+                          onMouseEnter={e => (e.currentTarget.style.background = '#f0f4ff')}
+                          onMouseLeave={e => (e.currentTarget.style.background = '')}
+                        >
+                          <span style={{ color: '#2a5bd7' }}>#{t.name}</span>
+                          <span style={{ marginLeft: '6px', fontSize: '10px', color: '#aaa' }}>{t.count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <button
+                  onClick={() => setTagMode(m => m === 'OR' ? 'AND' : 'OR')}
+                  title={tagMode === 'OR' ? 'OR：いずれかのタグに一致（クリックで AND に切替）' : 'AND：すべてのタグに一致（クリックで OR に切替）'}
+                  style={{
+                    padding: '0 10px',
+                    fontSize: '11px',
+                    fontWeight: 'bold',
                     border: '1px solid #ccc',
                     borderRadius: '4px',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.12)',
-                    maxHeight: '200px',
-                    overflowY: 'auto',
-                  }}>
-                    {tagSearchCandidates.map(t => (
-                      <div
-                        key={t.name}
-                        onMouseDown={e => {
-                          e.preventDefault()
-                          setTagQuery(t.name)
-                          setShowTagSearch(false)
-                        }}
-                        style={{ padding: '5px 10px', fontSize: '12px', cursor: 'pointer', color: '#333', whiteSpace: 'nowrap' }}
-                        onMouseEnter={e => (e.currentTarget.style.background = '#f0f4ff')}
-                        onMouseLeave={e => (e.currentTarget.style.background = '')}
-                      >
-                        <span style={{ color: '#2a5bd7' }}>#{t.name}</span>
-                        <span style={{ marginLeft: '6px', fontSize: '10px', color: '#aaa' }}>{t.count}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                    cursor: 'pointer',
+                    background: tagMode === 'AND' ? '#2a5bd7' : '#fff',
+                    color: tagMode === 'AND' ? '#fff' : '#666',
+                    whiteSpace: 'nowrap',
+                    flexShrink: 0,
+                  }}
+                >
+                  {tagMode}
+                </button>
               </div>
               <input
                 value={filterQuery}
@@ -1437,7 +1472,7 @@ function App(): JSX.Element {
             <div style={{ flex: 1, overflowY: 'auto', padding: '0 8px 8px' }}>
               {filtered.length === 0 ? (
                 <p style={{ fontSize: '13px', color: '#999', margin: '8px' }}>
-                  {query || fq ? '検索条件に一致する棋譜がありません' : '棋譜がありません'}
+                  {parsedTags.length > 0 || fq ? '検索条件に一致する棋譜がありません' : '棋譜がありません'}
                 </p>
               ) : (
                 <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>

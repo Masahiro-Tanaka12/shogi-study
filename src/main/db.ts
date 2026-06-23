@@ -227,32 +227,51 @@ export function getKifuMoveLabels(db: Db, kifuPath: string): string[] {
   return rows.map(r => r.next_move)
 }
 
-export function getPositionStats(db: Db, sfen: string, tagQuery?: string): MoveCount[] {
-  if (tagQuery) {
-    return db.prepare(`
-      SELECT p.next_move AS move, COUNT(*) AS count,
-             km.from_file AS fromFile, km.from_rank AS fromRank,
-             km.to_file   AS toFile,   km.to_rank   AS toRank,
-             km.is_drop   AS isDrop
-      FROM positions p
-      LEFT JOIN kifu_moves km ON km.kifu_id = p.kifu_id AND km.move_number = p.move_number
-      JOIN kifu_tags kt ON kt.kifu_id = p.kifu_id
-      JOIN tags t       ON t.id = kt.tag_id
-      WHERE p.sfen = ? AND p.next_move IS NOT NULL AND t.name LIKE ?
-      GROUP BY p.next_move
-      ORDER BY count DESC
-    `).all(sfen, `%${tagQuery}%`) as MoveCount[]
-  }
-
-  return db.prepare(`
+export function getPositionStats(db: Db, sfen: string, tags: string[], mode: 'AND' | 'OR'): MoveCount[] {
+  const statsCols = `
     SELECT p.next_move AS move, COUNT(*) AS count,
            km.from_file AS fromFile, km.from_rank AS fromRank,
            km.to_file   AS toFile,   km.to_rank   AS toRank,
            km.is_drop   AS isDrop
     FROM positions p
-    LEFT JOIN kifu_moves km ON km.kifu_id = p.kifu_id AND km.move_number = p.move_number
+    LEFT JOIN kifu_moves km ON km.kifu_id = p.kifu_id AND km.move_number = p.move_number`
+
+  if (tags.length === 0) {
+    return db.prepare(`
+      ${statsCols}
+      WHERE p.sfen = ? AND p.next_move IS NOT NULL
+      GROUP BY p.next_move ORDER BY count DESC
+    `).all(sfen) as MoveCount[]
+  }
+
+  const likeParams = tags.map(t => `%${t}%`)
+
+  if (mode === 'OR') {
+    const whereClauses = tags.map(() => 't.name LIKE ?').join(' OR ')
+    return db.prepare(`
+      WITH tagged_kifus AS (
+        SELECT DISTINCT kt.kifu_id
+        FROM kifu_tags kt JOIN tags t ON t.id = kt.tag_id
+        WHERE ${whereClauses}
+      )
+      ${statsCols}
+      JOIN tagged_kifus ON tagged_kifus.kifu_id = p.kifu_id
+      WHERE p.sfen = ? AND p.next_move IS NOT NULL
+      GROUP BY p.next_move ORDER BY count DESC
+    `).all([...likeParams, sfen]) as MoveCount[]
+  }
+
+  // AND: INTERSECT で全タグを持つ棋譜のみ
+  const subqueries = tags.map(() =>
+    `SELECT kifu_id FROM kifu_tags kt JOIN tags t ON t.id = kt.tag_id WHERE t.name LIKE ?`
+  ).join('\n      INTERSECT\n      ')
+  return db.prepare(`
+    WITH tagged_kifus AS (
+      ${subqueries}
+    )
+    ${statsCols}
+    JOIN tagged_kifus ON tagged_kifus.kifu_id = p.kifu_id
     WHERE p.sfen = ? AND p.next_move IS NOT NULL
-    GROUP BY p.next_move
-    ORDER BY count DESC
-  `).all(sfen) as MoveCount[]
+    GROUP BY p.next_move ORDER BY count DESC
+  `).all([...likeParams, sfen]) as MoveCount[]
 }

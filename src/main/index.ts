@@ -205,18 +205,10 @@ ipcMain.handle('import-folder', async () => {
   return { imported, skipped, failed, total, kifuList: getAllKifus(db) }
 })
 
-ipcMain.handle('get-position-stats', (_event, sfen: string, tagQuery: string) => {
-  const normalizedTag = tagQuery.replace(/^#+/, '').trim()
-  const tag = normalizedTag || ''
-  console.log('[stats-debug]')
-  console.log('selectedTag=', JSON.stringify(tag))
-  console.log('tag length=', tag.length)
-  console.log(
-    'tag bytes=',
-    Array.from(Buffer.from(tag, 'utf8'))
-  )
-  const result = getPositionStats(db, sfen, normalizedTag || undefined)
-  console.log(`[stats] sfen="${sfen}" tag="${tagQuery}"→"${normalizedTag}" → ${result.length} 手`)
+ipcMain.handle('get-position-stats', (_event, sfen: string, tags: string[], mode: 'AND' | 'OR') => {
+  const normalizedTags = (tags ?? []).map((t: string) => t.replace(/^#+/, '').trim()).filter(Boolean)
+  const result = getPositionStats(db, sfen, normalizedTags, mode ?? 'OR')
+  console.log(`[stats] sfen="${sfen}" tags=${JSON.stringify(normalizedTags)} mode=${mode} → ${result.length} 手`)
   return result
 })
 

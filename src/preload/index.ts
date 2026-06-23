@@ -23,8 +23,8 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('import-folder'),
   applyMoveString: (sfen: string, move: string): Promise<string | null> =>
     ipcRenderer.invoke('apply-move-string', sfen, move),
-  getPositionStats: (sfen: string, tagQuery: string): Promise<{ move: string; count: number }[]> =>
-    ipcRenderer.invoke('get-position-stats', sfen, tagQuery),
+  getPositionStats: (sfen: string, tags: string[], mode: 'AND' | 'OR'): Promise<{ move: string; count: number }[]> =>
+    ipcRenderer.invoke('get-position-stats', sfen, tags, mode),
   onKifuFileOpened: (callback: (files: KifuFile[]) => void): (() => void) => {
     const listener = (_: unknown, files: KifuFile[]) => callback(files)
     ipcRenderer.on('kifu-file-opened', listener)
