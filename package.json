@@ -1,7 +1,7 @@
 {
   "name": "shogi-study",
   "version": "0.1.0",
-  "description": "将棋の棋譜研究アプリ",
+  "description": "KifuDateBase — 将棋棋譜研究アプリ",
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",

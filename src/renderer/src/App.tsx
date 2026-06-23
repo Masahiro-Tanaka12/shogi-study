@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
-import type { KifuFile, Move, Player } from '../../shared/types'
+import type { KifuFile, Move, Player, PositionKifu } from '../../shared/types'
 import { sfenToBoard, applyMove, boardToSfen } from '../../shared/board'
 import { findToSquares, findDropSquares } from '../../shared/moveGen'
 import boardUrl from './assets/shogi/light_878x960.png'
@@ -30,6 +30,7 @@ declare global {
       getKifuMoveLabels: (kifuPath: string) => Promise<string[]>
       importFolder: () => Promise<{ imported: number; skipped: number; failed: number; total: number; kifuList: KifuFile[] } | null>
       applyMoveString: (sfen: string, move: string) => Promise<string | null>
+      getPositionKifus: (sfen: string, tags: string[], mode: 'AND' | 'OR') => Promise<PositionKifu[]>
       getPositionStats: (sfen: string, tags: string[], mode: 'AND' | 'OR') => Promise<MoveCount[]>
       onKifuFileOpened: (callback: (files: KifuFile[]) => void) => () => void
     }
@@ -549,6 +550,9 @@ interface KifuListItemProps {
   kifu: KifuFile
   isReplaying: boolean
   allTags: { name: string; count: number }[]
+  selectionMode: boolean
+  checked: boolean
+  onCheckToggle: () => void
   onTagAdd: (tagName: string) => void
   onTagRemove: (tagName: string) => void
   onDelete: () => void
@@ -557,7 +561,7 @@ interface KifuListItemProps {
   onReplay: () => Promise<void>
 }
 
-function KifuListItem({ kifu, isReplaying, allTags, onTagAdd, onTagRemove, onDelete, onReimport, onRelocate, onReplay }: KifuListItemProps): JSX.Element {
+function KifuListItem({ kifu, isReplaying, allTags, selectionMode, checked, onCheckToggle, onTagAdd, onTagRemove, onDelete, onReimport, onRelocate, onReplay }: KifuListItemProps): JSX.Element {
   const [input, setInput] = useState('')
   const [hovered, setHovered] = useState(false)
   const [confirming, setConfirming] = useState(false)
@@ -603,17 +607,27 @@ function KifuListItem({ kifu, isReplaying, allTags, onTagAdd, onTagRemove, onDel
 
   return (
     <li
-      onDoubleClick={() => { if (kifu.exists) onReplay() }}
+      onClick={selectionMode ? onCheckToggle : undefined}
+      onDoubleClick={() => { if (kifu.exists && !selectionMode) onReplay() }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => { setHovered(false); setConfirming(false) }}
       style={{
-        padding: '8px', borderRadius: '4px', cursor: 'default',
-        background: isReplaying ? '#e8f0ff' : hovered ? '#f5f5f5' : '',
-        outline: isReplaying ? '2px solid #d33' : 'none',
+        padding: '8px', borderRadius: '4px', cursor: selectionMode ? 'pointer' : 'default',
+        background: isReplaying ? '#e8f0ff' : (selectionMode && checked) ? '#eef3ff' : hovered ? '#f5f5f5' : '',
+        outline: isReplaying ? '2px solid #d33' : (selectionMode && checked) ? '2px solid #8aaae8' : 'none',
         outlineOffset: '-1px',
       }}
     >
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '4px' }}>
+        {selectionMode && (
+          <input
+            type="checkbox"
+            checked={checked}
+            onChange={onCheckToggle}
+            onClick={e => e.stopPropagation()}
+            style={{ marginTop: '3px', marginRight: '6px', flexShrink: 0, cursor: 'pointer', width: '14px', height: '14px' }}
+          />
+        )}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: '13px', color: kifu.exists ? '#333' : '#c44', wordBreak: 'break-all' }}>
             {kifu.fileName}
@@ -630,7 +644,7 @@ function KifuListItem({ kifu, isReplaying, allTags, onTagAdd, onTagRemove, onDel
             </div>
           )}
         </div>
-        {!kifu.exists && !confirming && (
+        {!selectionMode && !kifu.exists && !confirming && (
           <div style={{ display: 'flex', gap: '4px', marginLeft: '6px', flexShrink: 0 }}>
             <button
               onClick={handleRelocate}
@@ -647,7 +661,7 @@ function KifuListItem({ kifu, isReplaying, allTags, onTagAdd, onTagRemove, onDel
             </button>
           </div>
         )}
-        {kifu.exists && hovered && !confirming && (
+        {!selectionMode && kifu.exists && hovered && !confirming && (
           <div style={{ display: 'flex', gap: '4px', marginLeft: '6px', flexShrink: 0 }}>
             <button
               onClick={e => { e.stopPropagation(); onReplay() }}
@@ -686,7 +700,7 @@ function KifuListItem({ kifu, isReplaying, allTags, onTagAdd, onTagRemove, onDel
             </button>
           </div>
         )}
-        {confirming && (
+        {!selectionMode && confirming && (
           <div style={{ display: 'flex', gap: '4px', marginLeft: '6px', flexShrink: 0 }}>
             <button
               onClick={e => { e.stopPropagation(); onDelete() }}
@@ -711,7 +725,10 @@ function KifuListItem({ kifu, isReplaying, allTags, onTagAdd, onTagRemove, onDel
         )}
       </div>
 
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', alignItems: 'center' }}>
+      <div
+        onClick={selectionMode ? (e => e.stopPropagation()) : undefined}
+        style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', alignItems: 'center' }}
+      >
         {kifu.tags.map(tag => (
           <span
             key={tag}
@@ -900,10 +917,16 @@ function App(): JSX.Element {
   const [selection, setSelection] = useState<BoardSelection>(null)
   const [promoteResolver, setPromoteResolver] = useState<((v: boolean) => void) | null>(null)
   const [showTagSearch, setShowTagSearch] = useState(false)
+  const [positionKifus, setPositionKifus] = useState<PositionKifu[]>([])
+  const [showPositionKifus, setShowPositionKifus] = useState(false)
   const [replayKifu, setReplayKifu] = useState<KifuFile | null>(null)
   const [replaySfens, setReplaySfens] = useState<string[]>([])
   const [replayMoves, setReplayMoves] = useState<string[]>([])
   const [replayIndex, setReplayIndex] = useState(0)
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
+  const [bulkTagInput, setBulkTagInput] = useState('')
+  const [showBulkTagDropdown, setShowBulkTagDropdown] = useState(false)
   const mainRef = useRef<HTMLDivElement>(null)
   const [boardW, setBoardW] = useState(486)
 
@@ -936,6 +959,7 @@ function App(): JSX.Element {
   useEffect(() => {
     const tags = tagQuery.replace(/^#+/, '').trim().split(/\s+/).filter(Boolean)
     window.api.getPositionStats(currentSfen, tags, tagMode).then(setStats)
+    window.api.getPositionKifus(currentSfen, tags, tagMode).then(setPositionKifus)
   }, [currentSfen, tagQuery, tagMode])
 
   useEffect(() => {
@@ -1113,6 +1137,35 @@ function App(): JSX.Element {
     )
   }
 
+  async function handleBulkAddTag(): Promise<void> {
+    const name = bulkTagInput.trim().replace(/^#+/, '')
+    if (!name || selectedPaths.size === 0) return
+    await Promise.all([...selectedPaths].map(path => window.api.addTag(path, name)))
+    setKifuList(prev =>
+      prev.map(f =>
+        selectedPaths.has(f.path) && !f.tags.includes(name)
+          ? { ...f, tags: [...f.tags, name] }
+          : f
+      )
+    )
+    setBulkTagInput('')
+  }
+
+  function handleSelectionModeOff(): void {
+    setSelectionMode(false)
+    setSelectedPaths(new Set())
+    setBulkTagInput('')
+  }
+
+  function handleCheckToggle(path: string): void {
+    setSelectedPaths(prev => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }
+
   async function handleImportFolder(): Promise<void> {
     setFolderImporting(true)
     try {
@@ -1150,6 +1203,23 @@ function App(): JSX.Element {
     setReplayMoves(moves)
     setReplayIndex(0)
     setCurrentSfen(sfens[0])
+    setSfenHistory([])
+    setSelection(null)
+  }
+
+  async function handlePositionKifuClick(kifu: PositionKifu): Promise<void> {
+    const [sfens, moves] = await Promise.all([
+      window.api.getKifuSfens(kifu.path),
+      window.api.getKifuMoveLabels(kifu.path),
+    ])
+    if (sfens.length === 0) return
+    const targetIndex = sfens.findIndex(s => s === currentSfen)
+    const startIndex = targetIndex >= 0 ? targetIndex : 0
+    setReplayKifu(kifu)
+    setReplaySfens(sfens)
+    setReplayMoves(moves)
+    setReplayIndex(startIndex)
+    setCurrentSfen(sfens[startIndex])
     setSfenHistory([])
     setSelection(null)
   }
@@ -1218,6 +1288,10 @@ function App(): JSX.Element {
 
   const tagSearchCandidates = allTags.filter(t =>
     activeSearch === '' || t.name.includes(activeSearch)
+  )
+
+  const bulkTagCandidates = allTags.filter(t =>
+    bulkTagInput === '' || t.name.includes(bulkTagInput.replace(/^#+/, ''))
   )
 
   const backDisabled = sfenHistory.length === 0
@@ -1351,6 +1425,52 @@ function App(): JSX.Element {
                 ) : (
                   <StatsPanel stats={stats} prefix={sidePrefix(currentSfen)} onMoveClick={handleMoveClick} />
                 )}
+
+                <div style={{ marginTop: '16px', borderTop: '1px solid #eee', paddingTop: '10px' }}>
+                  <div
+                    onClick={() => setShowPositionKifus(v => !v)}
+                    style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', userSelect: 'none' }}
+                  >
+                    <span style={{ fontSize: '11px', color: '#888' }}>{showPositionKifus ? '▾' : '▸'}</span>
+                    <span style={{ fontSize: '12px', color: '#555', fontWeight: 'bold' }}>この局面を含む棋譜</span>
+                    <span style={{ fontSize: '11px', color: '#aaa' }}>({positionKifus.length}件)</span>
+                  </div>
+                  {showPositionKifus && (
+                    positionKifus.length === 0 ? (
+                      <p style={{ fontSize: '12px', color: '#bbb', margin: '6px 0 0 12px' }}>該当する棋譜がありません</p>
+                    ) : (
+                      <ul style={{ margin: '6px 0 0', padding: 0, listStyle: 'none' }}>
+                        {positionKifus.map(k => (
+                          <li
+                            key={k.path}
+                            onClick={() => handlePositionKifuClick(k)}
+                            style={{ padding: '5px 6px', borderBottom: '1px solid #f0f0f0', cursor: 'pointer', borderRadius: '4px' }}
+                            onMouseEnter={e => (e.currentTarget.style.background = '#f0f4ff')}
+                            onMouseLeave={e => (e.currentTarget.style.background = '')}
+                          >
+                            <div style={{ fontSize: '12px', color: '#333' }}>
+                              {k.senteName || k.goteName ? (
+                                <>
+                                  {k.senteName && <span>▲{k.senteName}</span>}
+                                  {k.senteName && k.goteName && <span style={{ margin: '0 3px', color: '#aaa' }}>vs</span>}
+                                  {k.goteName && <span>△{k.goteName}</span>}
+                                </>
+                              ) : (
+                                <span style={{ color: '#666' }}>{k.fileName}</span>
+                              )}
+                            </div>
+                            <div style={{ fontSize: '10px', color: '#aaa', marginTop: '1px' }}>
+                              {k.gameDate && <span>{k.gameDate}</span>}
+                              {k.moveNumber != null && (
+                                <span style={{ marginLeft: k.gameDate ? '6px' : '0' }}>{k.moveNumber}手目</span>
+                              )}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )
+                  )}
+                </div>
               </>
             )}
           </div>
@@ -1379,6 +1499,23 @@ function App(): JSX.Element {
                     style={{ fontSize: '11px', padding: '3px 8px', border: '1px solid #ccc', borderRadius: '4px', cursor: 'pointer', background: '#fff', color: '#555' }}
                   >
                     + テキストから追加
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (selectionMode) handleSelectionModeOff()
+                      else setSelectionMode(true)
+                    }}
+                    title={selectionMode ? '選択モードを終了' : '複数棋譜を選択してタグを一括付与'}
+                    style={{
+                      fontSize: '11px', padding: '3px 8px',
+                      border: `1px solid ${selectionMode ? '#2a5bd7' : '#ccc'}`,
+                      borderRadius: '4px', cursor: 'pointer',
+                      background: selectionMode ? '#e8f0ff' : '#fff',
+                      color: selectionMode ? '#2a5bd7' : '#555',
+                      fontWeight: selectionMode ? 'bold' : 'normal',
+                    }}
+                  >
+                    {selectionMode ? '選択解除' : '選択'}
                   </button>
                 </div>
                 {importResult && (
@@ -1467,6 +1604,83 @@ function App(): JSX.Element {
                 placeholder="先手・後手・日付で検索…"
                 style={{ width: '100%', boxSizing: 'border-box', marginTop: '4px', padding: '5px 8px', fontSize: '12px', border: '1px solid #ccc', borderRadius: '4px', outline: 'none' }}
               />
+
+              {selectionMode && (
+                <div style={{ marginTop: '6px', padding: '8px 10px', background: '#f0f4ff', borderRadius: '4px', border: '1px solid #c0d0f0' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '5px', cursor: 'pointer', fontSize: '12px', color: '#555', userSelect: 'none' }}>
+                      <input
+                        type="checkbox"
+                        checked={filtered.length > 0 && filtered.every(f => selectedPaths.has(f.path))}
+                        onChange={e => {
+                          if (e.target.checked) setSelectedPaths(new Set(filtered.map(f => f.path)))
+                          else setSelectedPaths(new Set())
+                        }}
+                        style={{ cursor: 'pointer', width: '13px', height: '13px' }}
+                      />
+                      全{filtered.length}件
+                    </label>
+                    <span style={{ fontSize: '12px', color: '#2a5bd7', marginLeft: 'auto', fontWeight: 'bold' }}>
+                      {selectedPaths.size}件選択中
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <div style={{ position: 'relative', flex: 1 }}>
+                      <input
+                        value={bulkTagInput}
+                        onChange={e => setBulkTagInput(e.target.value)}
+                        onFocus={() => setShowBulkTagDropdown(true)}
+                        onBlur={() => setShowBulkTagDropdown(false)}
+                        onKeyDown={e => { if (e.key === 'Enter') handleBulkAddTag() }}
+                        placeholder="タグを入力…"
+                        style={{ width: '100%', boxSizing: 'border-box', padding: '4px 8px', fontSize: '12px', border: '1px solid #aac', borderRadius: '4px', outline: 'none', background: '#fff' }}
+                      />
+                      {showBulkTagDropdown && bulkTagCandidates.length > 0 && (
+                        <div style={{
+                          position: 'absolute', top: 'calc(100% + 2px)', left: 0, right: 0, zIndex: 300,
+                          background: '#fff', border: '1px solid #ccc', borderRadius: '4px',
+                          boxShadow: '0 4px 12px rgba(0,0,0,0.12)', maxHeight: '160px', overflowY: 'auto',
+                        }}>
+                          {bulkTagCandidates.map(t => (
+                            <div
+                              key={t.name}
+                              onMouseDown={e => { e.preventDefault(); setBulkTagInput(t.name); setShowBulkTagDropdown(false) }}
+                              style={{ padding: '5px 10px', fontSize: '12px', cursor: 'pointer', color: '#333', whiteSpace: 'nowrap' }}
+                              onMouseEnter={e => (e.currentTarget.style.background = '#f0f4ff')}
+                              onMouseLeave={e => (e.currentTarget.style.background = '')}
+                            >
+                              <span style={{ color: '#2a5bd7' }}>#{t.name}</span>
+                              <span style={{ marginLeft: '6px', fontSize: '10px', color: '#aaa' }}>{t.count}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      onClick={handleBulkAddTag}
+                      disabled={!bulkTagInput.trim() || selectedPaths.size === 0}
+                      style={{
+                        padding: '4px 12px', fontSize: '12px', border: 'none', borderRadius: '4px',
+                        cursor: bulkTagInput.trim() && selectedPaths.size > 0 ? 'pointer' : 'default',
+                        background: bulkTagInput.trim() && selectedPaths.size > 0 ? '#2a5bd7' : '#9ab0ec',
+                        color: '#fff', whiteSpace: 'nowrap', flexShrink: 0,
+                      }}
+                    >
+                      付ける
+                    </button>
+                    <button
+                      onClick={handleSelectionModeOff}
+                      style={{
+                        padding: '4px 10px', fontSize: '12px',
+                        border: '1px solid #ccc', borderRadius: '4px', cursor: 'pointer',
+                        background: '#fff', color: '#555', whiteSpace: 'nowrap', flexShrink: 0,
+                      }}
+                    >
+                      キャンセル
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', padding: '0 8px 8px' }}>
@@ -1482,6 +1696,9 @@ function App(): JSX.Element {
                       kifu={f}
                       isReplaying={replayKifu?.path === f.path}
                       allTags={allTags}
+                      selectionMode={selectionMode}
+                      checked={selectedPaths.has(f.path)}
+                      onCheckToggle={() => handleCheckToggle(f.path)}
                       onTagAdd={name => handleTagAdd(f.path, name)}
                       onTagRemove={name => handleTagRemove(f.path, name)}
                       onDelete={() => handleKifuDelete(f.path)}

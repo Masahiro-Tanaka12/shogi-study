@@ -48,3 +48,7 @@ export interface PositionEntry {
   sfen: string
   nextMove: Move | null  // null = 最終局面（次の手なし）
 }
+
+export interface PositionKifu extends KifuFile {
+  moveNumber: number | null  // この局面が最初に登場する手数
+}

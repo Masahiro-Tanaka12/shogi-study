@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 type KifuFile = { fileName: string; path: string; tags: string[]; exists: boolean; senteName?: string; goteName?: string; gameDate?: string }
+type PositionKifu = KifuFile & { moveNumber: number | null }
 
 contextBridge.exposeInMainWorld('api', {
   selectKifuFile: (): Promise<string | null> => ipcRenderer.invoke('select-kifu-file'),
@@ -23,6 +24,8 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('import-folder'),
   applyMoveString: (sfen: string, move: string): Promise<string | null> =>
     ipcRenderer.invoke('apply-move-string', sfen, move),
+  getPositionKifus: (sfen: string, tags: string[], mode: 'AND' | 'OR'): Promise<PositionKifu[]> =>
+    ipcRenderer.invoke('get-position-kifus', sfen, tags, mode),
   getPositionStats: (sfen: string, tags: string[], mode: 'AND' | 'OR'): Promise<{ move: string; count: number }[]> =>
     ipcRenderer.invoke('get-position-stats', sfen, tags, mode),
   onKifuFileOpened: (callback: (files: KifuFile[]) => void): (() => void) => {

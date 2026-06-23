@@ -15,7 +15,7 @@ import { parseKi2 } from '../shared/ki2'
 import { parseCsa } from '../shared/csa'
 import { buildBoardState, boardToSfen, debugBoard, enumeratePositions, createInitialBoard } from '../shared/board'
 import { aggregatePositions, logPositionStats, type PositionStats } from '../shared/stats'
-import { initDb, insertKifuIfNew, insertPositions, insertKifuMoves, getAllKifus, addTag, removeTag, deleteKifu, updateKifuPath, clearKifuPositions, updateKifuMeta, getPositionStats, getNextSfen, getKifuSfens, getKifuMoveLabels, type Db } from './db'
+import { initDb, insertKifuIfNew, insertPositions, insertKifuMoves, getAllKifus, addTag, removeTag, deleteKifu, updateKifuPath, clearKifuPositions, updateKifuMeta, getPositionStats, getPositionKifus, getNextSfen, getKifuSfens, getKifuMoveLabels, type Db } from './db'
 
 const allStats: PositionStats = {}
 const INITIAL_SFEN = boardToSfen(createInitialBoard())
@@ -26,7 +26,7 @@ function createWindow(): void {
   const mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
-    title: '将棋研究アプリ',
+    title: 'KifuDateBase',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false
@@ -203,6 +203,11 @@ ipcMain.handle('import-folder', async () => {
   const total = imported + skipped + failed
   console.log(`[import-folder] 完了: total=${total}, imported=${imported}, skipped=${skipped}, failed=${failed}`)
   return { imported, skipped, failed, total, kifuList: getAllKifus(db) }
+})
+
+ipcMain.handle('get-position-kifus', (_event, sfen: string, tags: string[], mode: 'AND' | 'OR') => {
+  const normalizedTags = (tags ?? []).map((t: string) => t.replace(/^#+/, '').trim()).filter(Boolean)
+  return getPositionKifus(db, sfen, normalizedTags, mode ?? 'OR')
 })
 
 ipcMain.handle('get-position-stats', (_event, sfen: string, tags: string[], mode: 'AND' | 'OR') => {

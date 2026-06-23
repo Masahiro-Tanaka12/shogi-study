@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3'
 import { existsSync } from 'fs'
 import { basename } from 'path'
-import type { KifuFile, KifuMeta, PositionEntry } from '../shared/types'
+import type { KifuFile, KifuMeta, PositionEntry, PositionKifu } from '../shared/types'
 import { moveLabel } from '../shared/stats'
 
 const SCHEMA = `
@@ -274,4 +274,72 @@ export function getPositionStats(db: Db, sfen: string, tags: string[], mode: 'AN
     WHERE p.sfen = ? AND p.next_move IS NOT NULL
     GROUP BY p.next_move ORDER BY count DESC
   `).all([...likeParams, sfen]) as MoveCount[]
+}
+
+export function getPositionKifus(db: Db, sfen: string, tags: string[], mode: 'AND' | 'OR'): PositionKifu[] {
+  const kifuCols = `
+    SELECT k.file_path, k.file_name, k.sente_name, k.gote_name, k.game_date,
+           GROUP_CONCAT(DISTINCT t2.name) AS tag_names,
+           sk.move_number
+    FROM sfen_kifus sk
+    JOIN kifus k ON k.id = sk.kifu_id
+    LEFT JOIN kifu_tags kt2 ON kt2.kifu_id = k.id
+    LEFT JOIN tags t2 ON t2.id = kt2.tag_id
+    GROUP BY k.id
+    ORDER BY sk.move_number`
+
+  let rows: { file_path: string; file_name: string; sente_name: string | null; gote_name: string | null; game_date: string | null; tag_names: string | null; move_number: number | null }[]
+
+  if (tags.length === 0) {
+    rows = db.prepare(`
+      WITH sfen_kifus AS (
+        SELECT kifu_id, MIN(move_number) AS move_number
+        FROM positions WHERE sfen = ? GROUP BY kifu_id
+      )
+      ${kifuCols}
+    `).all(sfen) as typeof rows
+  } else {
+    const likeParams = tags.map(t => `%${t}%`)
+    if (mode === 'OR') {
+      const whereClauses = tags.map(() => 't.name LIKE ?').join(' OR ')
+      rows = db.prepare(`
+        WITH tagged_kifus AS (
+          SELECT DISTINCT kt.kifu_id FROM kifu_tags kt JOIN tags t ON t.id = kt.tag_id
+          WHERE ${whereClauses}
+        ),
+        sfen_kifus AS (
+          SELECT p.kifu_id, MIN(p.move_number) AS move_number
+          FROM positions p JOIN tagged_kifus ON tagged_kifus.kifu_id = p.kifu_id
+          WHERE p.sfen = ? GROUP BY p.kifu_id
+        )
+        ${kifuCols}
+      `).all([...likeParams, sfen]) as typeof rows
+    } else {
+      const subqueries = tags.map(() =>
+        `SELECT kifu_id FROM kifu_tags kt JOIN tags t ON t.id = kt.tag_id WHERE t.name LIKE ?`
+      ).join('\n          INTERSECT\n          ')
+      rows = db.prepare(`
+        WITH tagged_kifus AS (
+          ${subqueries}
+        ),
+        sfen_kifus AS (
+          SELECT p.kifu_id, MIN(p.move_number) AS move_number
+          FROM positions p JOIN tagged_kifus ON tagged_kifus.kifu_id = p.kifu_id
+          WHERE p.sfen = ? GROUP BY p.kifu_id
+        )
+        ${kifuCols}
+      `).all([...likeParams, sfen]) as typeof rows
+    }
+  }
+
+  return rows.map(r => ({
+    path: r.file_path,
+    fileName: r.file_name,
+    tags: r.tag_names ? r.tag_names.split(',') : [],
+    exists: existsSync(r.file_path),
+    senteName: r.sente_name ?? undefined,
+    goteName: r.gote_name ?? undefined,
+    gameDate: r.game_date ?? undefined,
+    moveNumber: r.move_number ?? null,
+  }))
 }
