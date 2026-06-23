@@ -28,6 +28,7 @@ declare global {
       reimportKifu: (kifuPath: string) => Promise<KifuFile[]>
       getKifuSfens: (kifuPath: string) => Promise<string[]>
       getKifuMoveLabels: (kifuPath: string) => Promise<string[]>
+      importFolder: () => Promise<{ imported: number; skipped: number; failed: number; total: number; kifuList: KifuFile[] } | null>
       applyMoveString: (sfen: string, move: string) => Promise<string | null>
       getPositionStats: (sfen: string, tagQuery: string) => Promise<MoveCount[]>
       onKifuFileOpened: (callback: (files: KifuFile[]) => void) => () => void
@@ -879,6 +880,8 @@ function App(): JSX.Element {
   const [kifuList, setKifuList] = useState<KifuFile[]>([])
   const [tagQuery, setTagQuery] = useState('')
   const [showPasteModal, setShowPasteModal] = useState(false)
+  const [folderImporting, setFolderImporting] = useState(false)
+  const [importResult, setImportResult] = useState<{ imported: number; skipped: number; failed: number; total: number } | null>(null)
   const [currentSfen, setCurrentSfen] = useState(INITIAL_SFEN)
   const [sfenHistory, setSfenHistory] = useState<string[]>([])
   const [stats, setStats] = useState<MoveCount[]>([])
@@ -1095,6 +1098,19 @@ function App(): JSX.Element {
           : f
       )
     )
+  }
+
+  async function handleImportFolder(): Promise<void> {
+    setFolderImporting(true)
+    try {
+      const result = await window.api.importFolder()
+      if (!result) return
+      setKifuList(result.kifuList)
+      setImportResult({ imported: result.imported, skipped: result.skipped, failed: result.failed, total: result.total })
+      setTimeout(() => setImportResult(null), 4000)
+    } finally {
+      setFolderImporting(false)
+    }
   }
 
   async function handleKifuDelete(kifuPath: string): Promise<void> {
@@ -1319,13 +1335,33 @@ function App(): JSX.Element {
             <div style={{ padding: '12px 16px 8px', flexShrink: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
                 <h3 style={{ margin: 0, fontSize: '14px', color: '#333' }}>棋譜リスト</h3>
-                <button
-                  onClick={() => setShowPasteModal(true)}
-                  title="KIFテキストを貼り付けて追加"
-                  style={{ fontSize: '11px', padding: '3px 8px', border: '1px solid #ccc', borderRadius: '4px', cursor: 'pointer', background: '#fff', color: '#555' }}
-                >
-                  + テキストから追加
-                </button>
+                <div style={{ display: 'flex', gap: '4px' }}>
+                  <button
+                    onClick={handleImportFolder}
+                    disabled={folderImporting}
+                    title="フォルダ内の棋譜をまとめて取り込む"
+                    style={{ fontSize: '11px', padding: '3px 8px', border: '1px solid #ccc', borderRadius: '4px', cursor: folderImporting ? 'default' : 'pointer', background: '#fff', color: folderImporting ? '#aaa' : '#555' }}
+                  >
+                    {folderImporting ? '取り込み中…' : '+ フォルダから追加'}
+                  </button>
+                  <button
+                    onClick={() => setShowPasteModal(true)}
+                    title="KIFテキストを貼り付けて追加"
+                    style={{ fontSize: '11px', padding: '3px 8px', border: '1px solid #ccc', borderRadius: '4px', cursor: 'pointer', background: '#fff', color: '#555' }}
+                  >
+                    + テキストから追加
+                  </button>
+                </div>
+                {importResult && (
+                  <div style={{
+                    marginTop: '6px', padding: '5px 10px', borderRadius: '4px', fontSize: '11px',
+                    background: importResult.failed > 0 ? '#fff3f3' : '#f0fff4',
+                    border: `1px solid ${importResult.failed > 0 ? '#f5c6cb' : '#b2dfdb'}`,
+                    color: '#333',
+                  }}>
+                    取り込み完了: 全{importResult.total}件 — 追加 {importResult.imported}件 / スキップ {importResult.skipped}件{importResult.failed > 0 ? ` / エラー ${importResult.failed}件` : ''}
+                  </div>
+                )}
               </div>
               <div style={{ position: 'relative' }}>
                 <input

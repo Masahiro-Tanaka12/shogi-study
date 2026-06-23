@@ -8,7 +8,7 @@ if (process.platform === 'win32') {
 }
 import { join, basename, extname } from 'path'
 import { readFile, writeFile } from 'fs/promises'
-import { existsSync } from 'fs'
+import { existsSync, readdirSync } from 'fs'
 import iconv from 'iconv-lite'
 import { parseKif } from '../shared/kifu'
 import { parseKi2 } from '../shared/ki2'
@@ -40,7 +40,22 @@ function createWindow(): void {
   }
 }
 
-async function processKifFile(p: string): Promise<void> {
+function findKifuFiles(dir: string): string[] {
+  const results: string[] = []
+  function walk(current: string): void {
+    try {
+      for (const entry of readdirSync(current, { withFileTypes: true })) {
+        const full = join(current, entry.name)
+        if (entry.isDirectory()) walk(full)
+        else if (['.kif', '.ki2', '.csa'].includes(extname(entry.name).toLowerCase())) results.push(full)
+      }
+    } catch { /* permission error など */ }
+  }
+  walk(dir)
+  return results
+}
+
+async function processKifFile(p: string): Promise<{ isNew: boolean }> {
   const buf = await readFile(p)
   const utf8 = buf.toString('utf-8')
   const hasReplacement = utf8.includes('�')
@@ -65,6 +80,7 @@ async function processKifFile(p: string): Promise<void> {
     console.log(`[db] skip: ${basename(p)} already exists (id=${kifuId})`)
   }
   aggregatePositions(positions, allStats)
+  return { isNew }
 }
 
 ipcMain.handle('select-kifu-file', async () => {
@@ -160,6 +176,31 @@ ipcMain.handle('get-kifu-sfens', (_event, kifuPath: string) => {
 
 ipcMain.handle('get-kifu-move-labels', (_event, kifuPath: string) => {
   return getKifuMoveLabels(db, kifuPath)
+})
+
+ipcMain.handle('import-folder', async () => {
+  const win = BrowserWindow.getFocusedWindow()
+  const { filePaths, canceled } = await dialog.showOpenDialog(win ?? new BrowserWindow(), {
+    properties: ['openDirectory'],
+    title: 'フォルダを選択',
+  })
+  if (canceled || filePaths.length === 0) return null
+
+  const files = findKifuFiles(filePaths[0])
+  let imported = 0, skipped = 0, failed = 0
+  for (const p of files) {
+    try {
+      const { isNew } = await processKifFile(p)
+      if (isNew) imported++
+      else skipped++
+    } catch {
+      failed++
+      console.log(`[import-folder] 失敗: ${basename(p)}`)
+    }
+  }
+  const total = imported + skipped + failed
+  console.log(`[import-folder] 完了: total=${total}, imported=${imported}, skipped=${skipped}, failed=${failed}`)
+  return { imported, skipped, failed, total, kifuList: getAllKifus(db) }
 })
 
 ipcMain.handle('get-position-stats', (_event, sfen: string, tagQuery: string) => {
