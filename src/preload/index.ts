@@ -28,9 +28,30 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('get-position-kifus', sfen, tags, mode),
   getPositionStats: (sfen: string, tags: string[], mode: 'AND' | 'OR'): Promise<{ move: string; count: number }[]> =>
     ipcRenderer.invoke('get-position-stats', sfen, tags, mode),
+  scrapeTest: (): Promise<{ hash: string; player1: string; player2: string; moves: number; filePath: string }> =>
+    ipcRenderer.invoke('scrape-test'),
+  scrapeStart: (params: { player?: string; strategy?: string; maxGames?: number }): Promise<void> =>
+    ipcRenderer.invoke('scrape-start', params),
+  scrapeCancel: (): Promise<void> =>
+    ipcRenderer.invoke('scrape-cancel'),
   onKifuFileOpened: (callback: (files: KifuFile[]) => void): (() => void) => {
     const listener = (_: unknown, files: KifuFile[]) => callback(files)
     ipcRenderer.on('kifu-file-opened', listener)
     return () => ipcRenderer.removeListener('kifu-file-opened', listener)
-  }
+  },
+  onScrapeProgress: (callback: (p: { done: number; total: number; latestFileName?: string }) => void): (() => void) => {
+    const listener = (_: unknown, p: { done: number; total: number; latestFileName?: string }) => callback(p)
+    ipcRenderer.on('scrape-progress', listener)
+    return () => ipcRenderer.removeListener('scrape-progress', listener)
+  },
+  onScrapeDone: (callback: (r: { imported: number; skipped: number; failed: number; cancelled?: boolean }) => void): (() => void) => {
+    const listener = (_: unknown, r: { imported: number; skipped: number; failed: number; cancelled?: boolean }) => callback(r)
+    ipcRenderer.on('scrape-done', listener)
+    return () => ipcRenderer.removeListener('scrape-done', listener)
+  },
+  onScrapeError: (callback: (msg: string) => void): (() => void) => {
+    const listener = (_: unknown, msg: string) => callback(msg)
+    ipcRenderer.on('scrape-error', listener)
+    return () => ipcRenderer.removeListener('scrape-error', listener)
+  },
 })

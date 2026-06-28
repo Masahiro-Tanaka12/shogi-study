@@ -1,0 +1,10 @@
+{
+    "terminal.integrated.autoReplies": {},
+    "terminal.integrated.profiles.windows": {
+        "PowerShell": {
+            "path": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "args": ["-NoExit", "-Command", "chcp 65001 | Out-Null; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8"]
+        }
+    },
+    "terminal.integrated.defaultProfile.windows": "PowerShell"
+}

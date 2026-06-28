@@ -16,14 +16,17 @@ import { parseCsa } from '../shared/csa'
 import { buildBoardState, boardToSfen, debugBoard, enumeratePositions, createInitialBoard } from '../shared/board'
 import { aggregatePositions, logPositionStats, type PositionStats } from '../shared/stats'
 import { initDb, insertKifuIfNew, insertPositions, insertKifuMoves, getAllKifus, addTag, removeTag, deleteKifu, updateKifuPath, clearKifuPositions, updateKifuMeta, getPositionStats, getPositionKifus, getNextSfen, getKifuSfens, getKifuMoveLabels, type Db } from './db'
+import { initScraperPreload, ensureScrapedDir, fetchGameHashes, fetchGameHashesPaginated, buildSearchUrl, scrapeGame, buildCsaText, buildFileName, type ScrapeParams } from './scraper'
 
 const allStats: PositionStats = {}
 const INITIAL_SFEN = boardToSfen(createInitialBoard())
 
 let db: Db
+let mainWindow: BrowserWindow | null = null
+let scrapeController: AbortController | null = null
 
 function createWindow(): void {
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     title: 'KifuDateBase',
@@ -210,6 +213,108 @@ ipcMain.handle('get-position-kifus', (_event, sfen: string, tags: string[], mode
   return getPositionKifus(db, sfen, normalizedTags, mode ?? 'OR')
 })
 
+ipcMain.handle('scrape-test', async () => {
+  console.log('[scrape-test] /latest からゲームハッシュ取得...')
+  const hashes = await fetchGameHashes('https://shogidb2.com/latest')
+  if (hashes.length === 0) throw new Error('ゲームが見つかりません')
+  const hash = hashes[0]
+  console.log(`[scrape-test] hash=${hash}`)
+
+  console.log('[scrape-test] 棋譜データ取得中 (最大20秒)...')
+  const data = await scrapeGame(hash)
+  console.log(`[scrape-test] 取得完了: ${data.player1} vs ${data.player2} (${data.moves.length}手)`)
+
+  const csaText = buildCsaText(data)
+  const scrapedDir = await ensureScrapedDir()
+  const filePath = join(scrapedDir, buildFileName(data))
+  await writeFile(filePath, csaText, 'utf-8')
+  console.log(`[scrape-test] 保存: ${filePath}`)
+
+  await processKifFile(filePath)
+  console.log('[scrape-test] DB 取り込み完了')
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const added = getAllKifus(db).filter(k => k.path === filePath)
+    mainWindow.webContents.send('kifu-file-opened', added)
+  }
+
+  return { hash, player1: data.player1, player2: data.player2, moves: data.moves.length, filePath }
+})
+
+ipcMain.handle('scrape-start', (_event, params: ScrapeParams) => {
+  scrapeController?.abort()
+  const controller = new AbortController()
+  scrapeController = controller
+  const { signal } = controller
+
+  ;(async () => {
+    try {
+      const maxGames = params.maxGames ?? 50
+      const maxPages = Math.ceil(maxGames / 10) + 1
+      const url = buildSearchUrl(params)
+      console.log(`[scrape] URL: ${url}, maxPages=${maxPages}`)
+      const hashes = (await fetchGameHashesPaginated(url, maxPages)).slice(0, maxGames)
+      console.log(`[scrape] ${hashes.length} 件を収集します`)
+
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('scrape-progress', { done: 0, total: hashes.length })
+      }
+
+      const scrapedDir = await ensureScrapedDir()
+      let imported = 0, skipped = 0, failed = 0
+
+      for (let i = 0; i < hashes.length; i++) {
+        if (signal.aborted) break
+        const hash = hashes[i]
+        try {
+          const data = await scrapeGame(hash)
+          const filePath = join(scrapedDir, buildFileName(data, hash))
+          await writeFile(filePath, buildCsaText(data), 'utf-8')
+          const { isNew } = await processKifFile(filePath)
+          if (isNew) {
+            imported++
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              const added = getAllKifus(db).filter(k => k.path === filePath)
+              mainWindow.webContents.send('kifu-file-opened', added)
+            }
+          } else {
+            skipped++
+          }
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('scrape-progress', {
+              done: i + 1, total: hashes.length, latestFileName: buildFileName(data, hash),
+            })
+          }
+        } catch {
+          failed++
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('scrape-progress', { done: i + 1, total: hashes.length })
+          }
+        }
+        if (i < hashes.length - 1 && !signal.aborted) {
+          await new Promise<void>(r => setTimeout(r, 1500))
+        }
+      }
+
+      if (!signal.aborted && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('scrape-done', { imported, skipped, failed })
+      }
+    } catch (e) {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('scrape-error', String(e))
+      }
+    }
+  })()
+})
+
+ipcMain.handle('scrape-cancel', () => {
+  scrapeController?.abort()
+  scrapeController = null
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('scrape-done', { imported: 0, skipped: 0, failed: 0, cancelled: true })
+  }
+})
+
 ipcMain.handle('get-position-stats', (_event, sfen: string, tags: string[], mode: 'AND' | 'OR') => {
   const normalizedTags = (tags ?? []).map((t: string) => t.replace(/^#+/, '').trim()).filter(Boolean)
   const result = getPositionStats(db, sfen, normalizedTags, mode ?? 'OR')
@@ -219,6 +324,7 @@ ipcMain.handle('get-position-stats', (_event, sfen: string, tags: string[], mode
 
 app.whenReady().then(async () => {
   db = initDb(join(app.getPath('userData'), 'shogi-study.db'))
+  await initScraperPreload()
   console.log('[db] opened:', join(app.getPath('userData'), 'shogi-study.db'))
 
   // ── DB 実データ確認 ──────────────────────────────────────────
@@ -293,6 +399,16 @@ app.whenReady().then(async () => {
           },
           { type: 'separator' },
           { label: '終了', role: 'quit' }
+        ]
+      },
+      {
+        label: '開発',
+        submenu: [
+          {
+            label: 'DevTools を開く',
+            accelerator: 'F12',
+            click: () => BrowserWindow.getFocusedWindow()?.webContents.toggleDevTools(),
+          },
         ]
       }
     ])

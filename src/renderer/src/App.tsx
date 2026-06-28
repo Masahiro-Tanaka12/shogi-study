@@ -33,6 +33,11 @@ declare global {
       getPositionKifus: (sfen: string, tags: string[], mode: 'AND' | 'OR') => Promise<PositionKifu[]>
       getPositionStats: (sfen: string, tags: string[], mode: 'AND' | 'OR') => Promise<MoveCount[]>
       onKifuFileOpened: (callback: (files: KifuFile[]) => void) => () => void
+      scrapeStart: (params: { player?: string; strategy?: string; maxGames?: number }) => Promise<void>
+      scrapeCancel: () => Promise<void>
+      onScrapeProgress: (callback: (p: { done: number; total: number; latestFileName?: string }) => void) => () => void
+      onScrapeDone: (callback: (r: { imported: number; skipped: number; failed: number; cancelled?: boolean }) => void) => () => void
+      onScrapeError: (callback: (msg: string) => void) => () => void
     }
   }
 }
@@ -929,6 +934,13 @@ function App(): JSX.Element {
   const [showBulkTagDropdown, setShowBulkTagDropdown] = useState(false)
   const mainRef = useRef<HTMLDivElement>(null)
   const [boardW, setBoardW] = useState(486)
+  const [showScrapePanel, setShowScrapePanel] = useState(false)
+  const [scrapePlayer, setScrapePlayer] = useState('')
+  const [scrapeStrategy, setScrapeStrategy] = useState('')
+  const [scrapeMaxGames, setScrapeMaxGames] = useState(30)
+  const [scrapeRunning, setScrapeRunning] = useState(false)
+  const [scrapeProgress, setScrapeProgress] = useState<{ done: number; total: number; latestFileName?: string } | null>(null)
+  const [scrapeResult, setScrapeResult] = useState<{ imported: number; skipped: number; failed: number; cancelled?: boolean } | null>(null)
 
   useEffect(() => {
     const el = mainRef.current
@@ -950,7 +962,7 @@ function App(): JSX.Element {
       setKifuList(prev => {
         const existingPaths = new Set(prev.map(f => f.path))
         const newFiles = files.filter(f => !existingPaths.has(f.path))
-        return [...prev, ...newFiles]
+        return [...newFiles, ...prev]
       })
     })
     return cleanup
@@ -982,6 +994,13 @@ function App(): JSX.Element {
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
   }, [replayKifu, replaySfens])
+
+  useEffect(() => {
+    const cp = window.api.onScrapeProgress(p => setScrapeProgress(p))
+    const cd = window.api.onScrapeDone(r => { setScrapeRunning(false); setScrapeResult(r) })
+    const ce = window.api.onScrapeError(() => setScrapeRunning(false))
+    return () => { cp(); cd(); ce() }
+  }, [])
 
   // 成り確認を Promise で待つ
   function askPromote(): Promise<boolean> {
@@ -1247,6 +1266,21 @@ function App(): JSX.Element {
     setSelection(null)
   }
 
+  function handleScrapeStart(): void {
+    setScrapeRunning(true)
+    setScrapeProgress({ done: 0, total: 0 })
+    setScrapeResult(null)
+    window.api.scrapeStart({
+      player: scrapePlayer.trim() || undefined,
+      strategy: scrapeStrategy.trim() || undefined,
+      maxGames: scrapeMaxGames,
+    })
+  }
+
+  function handleScrapeCancel(): void {
+    window.api.scrapeCancel()
+  }
+
   async function handleKifuRelocate(oldPath: string): Promise<void> {
     const newPath = await window.api.selectKifuFile()
     if (!newPath) return
@@ -1501,6 +1535,18 @@ function App(): JSX.Element {
                     + テキストから追加
                   </button>
                   <button
+                    onClick={() => { setShowScrapePanel(v => !v); setScrapeResult(null) }}
+                    style={{
+                      fontSize: '11px', padding: '3px 8px',
+                      border: `1px solid ${showScrapePanel ? '#2a5bd7' : '#ccc'}`,
+                      borderRadius: '4px', cursor: 'pointer',
+                      background: showScrapePanel ? '#e8f0ff' : '#fff',
+                      color: showScrapePanel ? '#2a5bd7' : '#555',
+                    }}
+                  >
+                    {showScrapePanel ? '▾ 収集' : '▸ 収集'}
+                  </button>
+                  <button
                     onClick={() => {
                       if (selectionMode) handleSelectionModeOff()
                       else setSelectionMode(true)
@@ -1604,6 +1650,88 @@ function App(): JSX.Element {
                 placeholder="先手・後手・日付で検索…"
                 style={{ width: '100%', boxSizing: 'border-box', marginTop: '4px', padding: '5px 8px', fontSize: '12px', border: '1px solid #ccc', borderRadius: '4px', outline: 'none' }}
               />
+
+              {showScrapePanel && (
+                <div style={{ marginTop: '6px', padding: '10px', background: '#f8f8ff', borderRadius: '4px', border: '1px solid #dde' }}>
+                  <div style={{ display: 'flex', gap: '6px', marginBottom: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <label style={{ fontSize: '11px', color: '#555', whiteSpace: 'nowrap' }}>棋士名</label>
+                      <input
+                        value={scrapePlayer}
+                        onChange={e => setScrapePlayer(e.target.value)}
+                        disabled={scrapeRunning}
+                        placeholder="例: 藤井聡太"
+                        style={{ width: '88px', fontSize: '11px', padding: '3px 6px', border: '1px solid #ccc', borderRadius: '4px', outline: 'none' }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <label style={{ fontSize: '11px', color: '#555', whiteSpace: 'nowrap' }}>戦形</label>
+                      <input
+                        value={scrapeStrategy}
+                        onChange={e => setScrapeStrategy(e.target.value)}
+                        disabled={scrapeRunning}
+                        placeholder="例: 角換わり"
+                        style={{ width: '78px', fontSize: '11px', padding: '3px 6px', border: '1px solid #ccc', borderRadius: '4px', outline: 'none' }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <label style={{ fontSize: '11px', color: '#555', whiteSpace: 'nowrap' }}>最大</label>
+                      <input
+                        type="number"
+                        value={scrapeMaxGames}
+                        onChange={e => setScrapeMaxGames(Math.max(1, Math.min(200, Number(e.target.value))))}
+                        disabled={scrapeRunning}
+                        style={{ width: '44px', fontSize: '11px', padding: '3px 6px', border: '1px solid #ccc', borderRadius: '4px', outline: 'none' }}
+                      />
+                      <span style={{ fontSize: '11px', color: '#777' }}>件</span>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    {!scrapeRunning ? (
+                      <button
+                        onClick={handleScrapeStart}
+                        style={{ fontSize: '11px', padding: '4px 12px', border: 'none', borderRadius: '4px', cursor: 'pointer', background: '#2a5bd7', color: '#fff', whiteSpace: 'nowrap' }}
+                      >
+                        収集開始
+                      </button>
+                    ) : (
+                      <button
+                        onClick={handleScrapeCancel}
+                        style={{ fontSize: '11px', padding: '4px 12px', border: 'none', borderRadius: '4px', cursor: 'pointer', background: '#c33', color: '#fff', whiteSpace: 'nowrap' }}
+                      >
+                        キャンセル
+                      </button>
+                    )}
+                    {scrapeProgress && scrapeProgress.total > 0 && (
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#555', marginBottom: '2px' }}>
+                          <span>{scrapeProgress.done} / {scrapeProgress.total} 件</span>
+                          {scrapeProgress.latestFileName && (
+                            <span style={{ color: '#888', maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {scrapeProgress.latestFileName}
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ height: '5px', background: '#dde4f0', borderRadius: '3px' }}>
+                          <div style={{
+                            height: '100%',
+                            width: `${Math.round((scrapeProgress.done / scrapeProgress.total) * 100)}%`,
+                            background: '#2a5bd7', borderRadius: '3px', transition: 'width 0.3s',
+                          }} />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  {scrapeResult && (
+                    <div style={{ marginTop: '6px', fontSize: '11px', color: scrapeResult.cancelled ? '#888' : (scrapeResult.failed > 0 ? '#c33' : '#2a8a2a') }}>
+                      {scrapeResult.cancelled
+                        ? 'キャンセルしました'
+                        : `完了: 追加 ${scrapeResult.imported}件 / スキップ ${scrapeResult.skipped}件${scrapeResult.failed > 0 ? ` / 失敗 ${scrapeResult.failed}件` : ''}`
+                      }
+                    </div>
+                  )}
+                </div>
+              )}
 
               {selectionMode && (
                 <div style={{ marginTop: '6px', padding: '8px 10px', background: '#f0f4ff', borderRadius: '4px', border: '1px solid #c0d0f0' }}>
